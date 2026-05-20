@@ -113,6 +113,47 @@ export function ChatPanel({
     }
   }, []);
 
+  // Restore prior conversation when the chat panel mounts for an existing
+  // project (e.g. after a page reload). The Zustand canvas survives the
+  // reload because it's persisted to localStorage, but events live in
+  // component state only — without this, the transcript appears empty
+  // even though there's a real conversation backing the project.
+  const loadedForProject = useRef<string | null>(null);
+  useEffect(() => {
+    const projectId = localProject?.id;
+    if (!projectId) return;
+    if (loadedForProject.current === projectId) return;
+    loadedForProject.current = projectId;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/conversations/by-project?projectId=${encodeURIComponent(projectId)}`,
+        );
+        if (!res.ok) return;
+        const json = (await res.json()) as {
+          conversationId: string | null;
+          events: AgentEvent[];
+        };
+        if (cancelled) return;
+        if (json.conversationId) {
+          setConversationId(json.conversationId);
+          onConversationChange?.(json.conversationId);
+        }
+        if (json.events && json.events.length > 0) {
+          // Only replace if the component hasn't already received events
+          // (avoid trampling a mid-conversation state during HMR/dev).
+          setEvents((cur) => (cur.length === 0 ? json.events : cur));
+        }
+      } catch {
+        // Non-fatal — user can still chat, history just won't restore.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [localProject?.id, onConversationChange]);
+
   // Locate or create a "chat_uploads" collection on the project's Documents
   // node, minting the node itself if there isn't one yet. Returns the
   // collection id. Mutates the Zustand store directly because the chat panel
