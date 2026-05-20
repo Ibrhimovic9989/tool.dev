@@ -36,11 +36,35 @@ type UploadState =
   | { status: "indexed"; chunks: number; strategy: string }
   | { status: "error"; message: string };
 
+const ACCEPTED_EXTENSIONS = [
+  ".pdf",
+  ".docx",
+  ".doc",
+  ".txt",
+  ".md",
+  ".csv",
+  ".xlsx",
+  ".xls",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".tiff",
+  ".tif",
+  ".bmp",
+];
+
+function isAccepted(file: File): boolean {
+  const name = file.name.toLowerCase();
+  return ACCEPTED_EXTENSIONS.some((ext) => name.endsWith(ext));
+}
+
 export function DocumentsConfig({ nodeId, data }: Props) {
   const updateNodeData = useBuilder((s) => s.updateNodeData);
   const project = useCurrentProject();
   // fileName -> upload state, keyed by collectionId + name
   const [progress, setProgress] = useState<Record<string, UploadState>>({});
+  // Which collection's dropzone is currently being hovered with a drag
+  const [dragOver, setDragOver] = useState<string | null>(null);
 
   const setReady = (next: Partial<DocumentsSourceData>) => {
     const merged = { ...data, ...next };
@@ -74,20 +98,30 @@ export function DocumentsConfig({ nodeId, data }: Props) {
     setReady({ collections: data.collections.filter((c) => c.id !== id) });
   };
 
-  const handleFiles = async (collectionId: string, files: FileList | null) => {
-    if (!files || !project) return;
+  const handleFiles = async (collectionId: string, fileList: FileList | File[] | null) => {
+    if (!fileList || !project) return;
     const target = data.collections.find((c) => c.id === collectionId);
     if (!target) return;
 
+    const all = Array.from(fileList);
+    const accepted = all.filter(isAccepted);
+    const rejected = all.length - accepted.length;
+    if (rejected > 0) {
+      toast.error(
+        `${rejected} file${rejected === 1 ? "" : "s"} skipped — unsupported format`,
+      );
+    }
+    if (accepted.length === 0) return;
+
     // Optimistically add file rows so the user sees them while indexing runs.
-    const newFiles = Array.from(files).map((f) => ({
+    const newFiles = accepted.map((f) => ({
       name: f.name,
       size: f.size,
       mime: f.type,
     }));
     updateCollection(collectionId, { files: [...target.files, ...newFiles] });
 
-    for (const file of Array.from(files)) {
+    for (const file of accepted) {
       const key = `${collectionId}:${file.name}`;
       setProgress((p) => ({ ...p, [key]: { status: "uploading", pct: 0 } }));
       try {
@@ -204,14 +238,57 @@ export function DocumentsConfig({ nodeId, data }: Props) {
                 />
 
                 {data.sourceKind === "upload" ? (
-                  <label className="flex cursor-pointer items-center justify-center gap-2 rounded-md border border-dashed p-3 text-xs text-muted-foreground hover:bg-muted/40">
-                    <Upload className="size-4" />
-                    Click to upload PDFs, DOCX, or text files
+                  <label
+                    onDragEnter={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (e.dataTransfer.types.includes("Files")) {
+                        setDragOver(c.id);
+                      }
+                    }}
+                    onDragOver={(e) => {
+                      // Required so the drop event actually fires.
+                      e.preventDefault();
+                      e.stopPropagation();
+                      e.dataTransfer.dropEffect = "copy";
+                    }}
+                    onDragLeave={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      // relatedTarget is the element being entered. If it's
+                      // outside the label, the drag truly left.
+                      const next = e.relatedTarget as Node | null;
+                      if (!next || !e.currentTarget.contains(next)) {
+                        setDragOver(null);
+                      }
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setDragOver(null);
+                      handleFiles(c.id, e.dataTransfer.files);
+                    }}
+                    className={
+                      "flex cursor-pointer flex-col items-center justify-center gap-1 rounded-md border border-dashed p-4 text-xs transition " +
+                      (dragOver === c.id
+                        ? "border-emerald-500/70 bg-emerald-500/10 text-foreground"
+                        : "text-muted-foreground hover:bg-muted/40")
+                    }
+                  >
+                    <span className="flex items-center gap-2">
+                      <Upload className="size-4" />
+                      {dragOver === c.id
+                        ? "Drop to upload"
+                        : "Drop files here or click to upload"}
+                    </span>
+                    <span className="text-[10.5px] text-muted-foreground/80">
+                      PDF, DOCX, TXT, MD, CSV, XLSX/XLS, PNG, JPG, TIFF, BMP · up to 25 MB each
+                    </span>
                     <input
                       type="file"
                       multiple
                       className="hidden"
-                      accept=".pdf,.docx,.doc,.txt,.md"
+                      accept=".pdf,.docx,.doc,.txt,.md,.csv,.xlsx,.xls,.png,.jpg,.jpeg,.tiff,.tif,.bmp"
                       onChange={(e) => handleFiles(c.id, e.target.files)}
                     />
                   </label>

@@ -9,11 +9,54 @@ import {
   Wrench,
   CheckCircle2,
   XCircle,
+  Paperclip,
+  X,
+  FileText,
+  AlertTriangle,
+  Upload,
 } from "lucide-react";
+import { nanoid } from "nanoid";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import type { McpProject } from "@/lib/types";
+import { useBuilder } from "@/lib/store";
+import type { McpProject, DocCollection } from "@/lib/types";
+
+const ACCEPTED_EXTENSIONS = [
+  ".pdf",
+  ".docx",
+  ".doc",
+  ".txt",
+  ".md",
+  ".csv",
+  ".xlsx",
+  ".xls",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".tiff",
+  ".tif",
+  ".bmp",
+];
+const ACCEPT_ATTR = ACCEPTED_EXTENSIONS.join(",");
+
+function isAccepted(file: File): boolean {
+  const name = file.name.toLowerCase();
+  return ACCEPTED_EXTENSIONS.some((ext) => name.endsWith(ext));
+}
+
+interface Attachment {
+  id: string;
+  name: string;
+  size: number;
+  mime: string;
+  status: "uploading" | "indexed" | "error";
+  chunks?: number;
+  strategy?: string;
+  fileId?: string;
+  message?: string;
+}
 
 interface AgentEvent {
   kind: "user" | "assistant" | "tool_call" | "tool_result";
@@ -51,6 +94,10 @@ export function ChatPanel({
   const [input, setInput] = useState("");
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [dragOver, setDragOver] = useState(false);
+  const dragDepth = useRef(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const searchParams = useSearchParams();
   const seedRef = useRef<string | null>(searchParams.get("seed"));
@@ -66,11 +113,208 @@ export function ChatPanel({
     }
   }, []);
 
+  // Locate or create a "chat_uploads" collection on the project's Documents
+  // node, minting the node itself if there isn't one yet. Returns the
+  // collection id. Mutates the Zustand store directly because the chat panel
+  // doesn't have a write callback for partial project edits.
+  const ensureChatCollection = (projectId: string): string => {
+    const state = useBuilder.getState();
+    const project = state.projects[projectId];
+    if (!project) throw new Error("Project not found in store");
+
+    let docNode = project.nodes.find((n) => n.data.kind === "source.documents");
+    if (!docNode) {
+      // Place it to the left of the canvas where the user can see it.
+      const newId = state.addNode("source.documents", { x: 240, y: 360 });
+      const refreshed = useBuilder.getState().projects[projectId];
+      docNode = refreshed?.nodes.find((n) => n.id === newId);
+    }
+    if (!docNode || docNode.data.kind !== "source.documents") {
+      throw new Error("Couldn't ensure a Documents source");
+    }
+
+    const existing = docNode.data.collections.find(
+      (c) => c.resourceName === "chat_uploads",
+    );
+    if (existing) return existing.id;
+
+    const newCollection: DocCollection = {
+      id: nanoid(8),
+      resourceName: "chat_uploads",
+      description: "Documents you attached in chat",
+      files: [],
+      chunkSize: 1000,
+      enabled: true,
+    };
+    state.updateNodeData(docNode.id, {
+      collections: [...docNode.data.collections, newCollection],
+    });
+    return newCollection.id;
+  };
+
+  // After a file is indexed, register it on the Documents node's collection
+  // so the canvas, /servers, and the next agent turn all see it.
+  const recordIndexedFile = (
+    projectId: string,
+    collectionId: string,
+    file: { name: string; size: number; mime: string },
+    fileId: string,
+  ) => {
+    const state = useBuilder.getState();
+    const project = state.projects[projectId];
+    if (!project) return;
+    const docNode = project.nodes.find((n) => n.data.kind === "source.documents");
+    if (!docNode || docNode.data.kind !== "source.documents") return;
+    const nextCollections = docNode.data.collections.map((c) =>
+      c.id === collectionId
+        ? {
+            ...c,
+            files: [
+              ...c.files,
+              { name: file.name, size: file.size, mime: file.mime, blobKey: fileId },
+            ],
+          }
+        : c,
+    );
+    state.updateNodeData(docNode.id, {
+      collections: nextCollections,
+      status: "ready",
+    });
+  };
+
+  const processFiles = async (raw: FileList | File[] | null) => {
+    if (!raw) return;
+    const project = localProject;
+    if (!project) {
+      toast.error("Open a project first.");
+      return;
+    }
+    const all = Array.from(raw);
+    const accepted = all.filter(isAccepted);
+    const rejected = all.length - accepted.length;
+    if (rejected > 0) {
+      toast.error(
+        `${rejected} file${rejected === 1 ? "" : "s"} skipped — unsupported format`,
+      );
+    }
+    if (accepted.length === 0) return;
+
+    let collectionId: string;
+    try {
+      collectionId = ensureChatCollection(project.id);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't prepare upload");
+      return;
+    }
+
+    const chips: (Attachment & { _file: File })[] = accepted.map((file) => ({
+      id: nanoid(8),
+      name: file.name,
+      size: file.size,
+      mime: file.type,
+      status: "uploading",
+      _file: file,
+    }));
+    // Strip the private _file before pushing into state (it stays in this closure).
+    setAttachments((prev) => [
+      ...prev,
+      ...chips.map(({ _file, ...rest }) => {
+        void _file;
+        return rest;
+      }),
+    ]);
+
+    for (const chip of chips) {
+      try {
+        const form = new FormData();
+        form.append("projectId", project.id);
+        form.append("collectionId", collectionId);
+        form.append("file", chip._file);
+        const res = await fetch("/api/docs/index", { method: "POST", body: form });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+        setAttachments((prev) =>
+          prev.map((a) =>
+            a.id === chip.id
+              ? {
+                  ...a,
+                  status: "indexed",
+                  chunks: json.chunks ?? 0,
+                  strategy: json.strategy,
+                  fileId: json.fileId,
+                }
+              : a,
+          ),
+        );
+        recordIndexedFile(
+          project.id,
+          collectionId,
+          { name: chip.name, size: chip.size, mime: chip.mime },
+          json.fileId,
+        );
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Indexing failed";
+        setAttachments((prev) =>
+          prev.map((a) => (a.id === chip.id ? { ...a, status: "error", message: msg } : a)),
+        );
+        toast.error(`${chip.name}: ${msg}`);
+      }
+    }
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+  };
+
+  // Drag-and-drop on the whole chat panel. dragDepth handles enter/leave on
+  // nested children (without it, leaving a child fires dragleave even though
+  // the cursor is still inside the panel).
+  const onPanelDragEnter = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragOver(true);
+  };
+  const onPanelDragOver = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  };
+  const onPanelDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragOver(false);
+  };
+  const onPanelDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragOver(false);
+    processFiles(e.dataTransfer.files);
+  };
+
   const send = async (text: string) => {
     const trimmed = text.trim();
-    if (!trimmed || pending) return;
+    const stillUploading = attachments.some((a) => a.status === "uploading");
+    if (stillUploading) {
+      toast.error("Wait for uploads to finish.");
+      return;
+    }
+    if (!trimmed && attachments.length === 0) return;
+    if (pending) return;
+
+    const indexed = attachments.filter((a) => a.status === "indexed");
+    const attachmentPrefix =
+      indexed.length > 0
+        ? `[Attached ${indexed.length} file${indexed.length === 1 ? "" : "s"} into the "chat_uploads" Documents collection: ${indexed
+            .map((a) => `${a.name} (${a.chunks ?? 0} chunks)`)
+            .join(", ")}]\n`
+        : "";
+    const augmented = attachmentPrefix + trimmed;
+    const displayText = trimmed || `📎 Attached ${indexed.length} file${indexed.length === 1 ? "" : "s"}`;
+
     setInput("");
-    setEvents((cur) => [...cur, { kind: "user", text: trimmed }]);
+    setAttachments([]);
+    setEvents((cur) => [...cur, { kind: "user", text: displayText }]);
     setPending(true);
     try {
       let conv = conversationId;
@@ -92,7 +336,7 @@ export function ChatPanel({
       const res = await fetch("/api/agent/turn", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ conversationId: conv, message: trimmed }),
+        body: JSON.stringify({ conversationId: conv, message: augmented }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
@@ -118,7 +362,25 @@ export function ChatPanel({
   };
 
   return (
-    <aside className="flex flex-col overflow-hidden border-r bg-white">
+    <aside
+      className="relative flex flex-col overflow-hidden border-r bg-white"
+      onDragEnter={onPanelDragEnter}
+      onDragOver={onPanelDragOver}
+      onDragLeave={onPanelDragLeave}
+      onDrop={onPanelDrop}
+    >
+      {dragOver && (
+        <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-gov-500/10 backdrop-blur-[1px]">
+          <div className="rounded-2xl border-2 border-dashed border-gov-500 bg-white/95 px-6 py-5 text-center shadow-lg">
+            <Upload className="mx-auto mb-2 size-6 text-gov-600" />
+            <p className="text-sm font-medium">Drop files to attach</p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">
+              PDF, DOCX, TXT, MD, CSV, XLSX, images · multiple ok
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="border-b px-4 py-2.5">
         <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-muted-foreground">
           <Sparkles className="size-3 text-gov-600" />
@@ -150,6 +412,14 @@ export function ChatPanel({
           send(input);
         }}
       >
+        {attachments.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {attachments.map((a) => (
+              <AttachmentChip key={a.id} a={a} onRemove={() => removeAttachment(a.id)} />
+            ))}
+          </div>
+        )}
+
         <div className="rounded-xl border bg-white focus-within:border-gov-500 focus-within:ring-2 focus-within:ring-gov-500/15 transition">
           <Textarea
             value={input}
@@ -160,20 +430,52 @@ export function ChatPanel({
                 send(input);
               }
             }}
-            placeholder="Tell the agent what to build…"
+            placeholder={
+              attachments.length > 0
+                ? "Add a message, or send with just the files…"
+                : "Tell the agent what to build… (drop files anywhere here)"
+            }
             rows={3}
             disabled={pending}
             className="resize-none border-0 shadow-none focus-visible:ring-0 px-3 pt-2.5 pb-1 text-sm"
           />
           <div className="flex items-center justify-between gap-2 px-3 pb-2.5">
-            <p className="text-[11px] text-muted-foreground">
-              <kbd className="rounded border px-1 text-[10px]">Enter</kbd> send ·{" "}
-              <kbd className="rounded border px-1 text-[10px]">⇧Enter</kbd> newline
-            </p>
+            <div className="flex items-center gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                accept={ACCEPT_ATTR}
+                onChange={(e) => {
+                  processFiles(e.target.files);
+                  // Reset so picking the same file twice still triggers onChange.
+                  e.target.value = "";
+                }}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={pending}
+                className="h-7 gap-1 px-2 text-[11.5px] text-muted-foreground"
+              >
+                <Paperclip className="size-3.5" />
+                Attach
+              </Button>
+              <p className="text-[11px] text-muted-foreground">
+                <kbd className="rounded border px-1 text-[10px]">Enter</kbd> send
+              </p>
+            </div>
             <Button
               type="submit"
               size="sm"
-              disabled={pending || !input.trim()}
+              disabled={
+                pending ||
+                attachments.some((a) => a.status === "uploading") ||
+                (!input.trim() && attachments.filter((a) => a.status === "indexed").length === 0)
+              }
               className="h-8"
             >
               {pending ? (
@@ -187,6 +489,57 @@ export function ChatPanel({
         </div>
       </form>
     </aside>
+  );
+}
+
+function AttachmentChip({
+  a,
+  onRemove,
+}: {
+  a: Attachment;
+  onRemove: () => void;
+}) {
+  const icon =
+    a.status === "uploading" ? (
+      <Loader2 className="size-3 animate-spin text-muted-foreground shrink-0" />
+    ) : a.status === "indexed" ? (
+      <CheckCircle2 className="size-3 text-emerald-600 shrink-0" />
+    ) : (
+      <AlertTriangle className="size-3 text-amber-600 shrink-0" />
+    );
+  const detail =
+    a.status === "uploading"
+      ? "indexing…"
+      : a.status === "indexed"
+        ? `${a.chunks ?? 0} chunks`
+        : "failed";
+  const title =
+    a.status === "error" ? a.message ?? "Indexing failed" : `${a.name} · ${detail}`;
+  return (
+    <span
+      title={title}
+      className={cn(
+        "inline-flex max-w-[220px] items-center gap-1.5 rounded-full border px-2 py-1 text-[11px]",
+        a.status === "error"
+          ? "border-amber-300 bg-amber-50"
+          : a.status === "indexed"
+            ? "border-emerald-200 bg-emerald-50"
+            : "border-border bg-muted/40",
+      )}
+    >
+      {icon}
+      <FileText className="size-3 shrink-0 text-muted-foreground" />
+      <span className="truncate font-medium">{a.name}</span>
+      <span className="shrink-0 text-muted-foreground">{detail}</span>
+      <button
+        type="button"
+        onClick={onRemove}
+        className="shrink-0 rounded-full p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+        aria-label="Remove attachment"
+      >
+        <X className="size-3" />
+      </button>
+    </span>
   );
 }
 
