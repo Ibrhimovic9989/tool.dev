@@ -240,59 +240,132 @@ function statusHtml(args: {
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>${escapeHtml(name)} — MCP server</title>
 <style>
-  :root{--bg:#fafafa;--card:#fff;--ink:#0f172a;--ink-2:#475569;--ink-3:#94a3b8;--border:#e2e8f0;--accent:#0f766e;--accent-bg:#ccfbf1;--code-bg:#0b1220;--code-ink:#e2e8f0;}
+  :root{
+    --bg: oklch(0.10 0.018 250);
+    --card: oklch(0.13 0.020 250);
+    --card-lift: oklch(0.17 0.022 250);
+    --ink: oklch(0.97 0 0);
+    --ink-2: oklch(0.75 0.012 250);
+    --ink-3: oklch(0.58 0.014 250);
+    --border: oklch(0.28 0.020 250 / 0.55);
+    --border-strong: oklch(0.36 0.020 250 / 0.85);
+    --accent: oklch(0.72 0.14 245);
+    --accent-2: oklch(0.84 0.10 235);
+    --live: oklch(0.78 0.16 165);
+    --code-bg: oklch(0.08 0.018 250);
+    --code-ink: oklch(0.85 0.012 250);
+    --inline-code-bg: oklch(0.17 0.022 250 / 0.7);
+  }
   *{box-sizing:border-box}
-  body{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;max-width:760px;margin:0 auto;padding:48px 24px 80px;color:var(--ink);background:var(--bg);line-height:1.55}
-  .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px 3px 8px;border-radius:9999px;background:var(--accent-bg);color:var(--accent);font-size:12px;font-weight:600;margin-bottom:14px}
-  .pill::before{content:"";width:6px;height:6px;border-radius:9999px;background:var(--accent);box-shadow:0 0 0 3px rgba(15,118,110,.18)}
-  h1{font-size:28px;margin:0 0 6px;letter-spacing:-0.01em}
-  .meta{color:var(--ink-2);font-size:13.5px;margin:0 0 6px}
+  body{
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    max-width:760px;margin:0 auto;padding:48px 24px 80px;
+    color:var(--ink);background:var(--bg);line-height:1.55;
+    background-image:
+      radial-gradient(60% 40% at 80% 0%, oklch(0.65 0.18 230 / 0.10), transparent 70%),
+      radial-gradient(50% 35% at 0% 0%, oklch(0.62 0.20 285 / 0.08), transparent 70%);
+    background-attachment: fixed;
+    -webkit-font-smoothing: antialiased;
+  }
+  .pill{
+    display:inline-flex;align-items:center;gap:7px;padding:3px 11px 3px 9px;
+    border-radius:9999px;background:oklch(0.78 0.16 165 / 0.14);
+    color:var(--live);font-size:11.5px;font-weight:600;letter-spacing:0.04em;
+    text-transform:uppercase;margin-bottom:14px;
+    border:1px solid oklch(0.78 0.16 165 / 0.25);
+  }
+  .pill::before{content:"";width:6px;height:6px;border-radius:9999px;background:var(--live);box-shadow:0 0 0 3px oklch(0.78 0.16 165 / 0.20)}
+  h1{font-size:30px;margin:0 0 6px;letter-spacing:-0.015em;font-weight:600}
+  .meta{color:var(--ink-3);font-size:13px;margin:0 0 6px;font-feature-settings:"tnum"}
   .desc{color:var(--ink-2);font-size:14px;margin:8px 0 0;max-width:62ch}
 
-  .url-card{margin:24px 0 6px;border:1px solid var(--border);background:var(--card);border-radius:12px;padding:14px 16px}
-  .url-card .label{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
-  .url-row{display:flex;gap:8px;align-items:center;margin-top:6px}
-  .url{flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:14px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:#f1f5f9;padding:8px 10px;border-radius:8px}
-  .btn{appearance:none;border:1px solid var(--border);background:var(--card);padding:8px 12px;border-radius:8px;font-size:12.5px;cursor:pointer;font-weight:500;color:var(--ink);transition:all .15s}
-  .btn:hover{background:#f1f5f9}.btn.done{background:#dcfce7;color:#166534;border-color:#bbf7d0}
-  .url-hint{margin:8px 0 0;font-size:12.5px;color:var(--ink-2)}
+  .url-card{
+    margin:28px 0 6px;border:1px solid var(--border);background:var(--card);
+    border-radius:14px;padding:16px 18px;
+    box-shadow: 0 1px 0 oklch(1 0 0 / 0.04) inset, 0 14px 40px oklch(0.05 0.02 250 / 0.5);
+  }
+  .url-card .label{font-size:10.5px;letter-spacing:.10em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
+  .url-row{display:flex;gap:8px;align-items:center;margin-top:8px}
+  .url{
+    flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:13.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    background:var(--card-lift);padding:9px 11px;border-radius:8px;
+    border:1px solid var(--border);
+  }
+  .btn{
+    appearance:none;border:1px solid var(--border-strong);background:var(--card-lift);
+    padding:8px 13px;border-radius:8px;font-size:12.5px;cursor:pointer;font-weight:500;
+    color:var(--ink);transition:all .15s
+  }
+  .btn:hover{background:oklch(0.22 0.022 250);border-color:var(--accent)}
+  .btn.done{background:oklch(0.78 0.16 165 / 0.20);color:var(--live);border-color:oklch(0.78 0.16 165 / 0.45)}
+  .url-hint{margin:10px 0 0;font-size:12.5px;color:var(--ink-3)}
 
   .section{margin:28px 0}
-  .section h2{font-size:15px;margin:0 0 4px;display:flex;align-items:center;gap:8px}
-  .count{font-size:12px;color:var(--ink-3);background:#f1f5f9;border-radius:9999px;padding:1px 8px;font-weight:600}
-  .hint{margin:0 0 12px;color:var(--ink-2);font-size:13px}
-  .items{list-style:none;padding:0;margin:0;border:1px solid var(--border);border-radius:10px;background:var(--card);overflow:hidden}
-  .items li{padding:10px 14px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:2px}
+  .section h2{font-size:14.5px;margin:0 0 4px;display:flex;align-items:center;gap:9px;letter-spacing:-0.005em}
+  .count{font-size:11px;color:var(--ink-2);background:var(--card-lift);border:1px solid var(--border);border-radius:9999px;padding:1.5px 9px;font-weight:600;font-feature-settings:"tnum"}
+  .hint{margin:0 0 12px;color:var(--ink-3);font-size:12.5px}
+  .items{list-style:none;padding:0;margin:0;border:1px solid var(--border);border-radius:12px;background:var(--card);overflow:hidden}
+  .items li{padding:11px 15px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:3px}
   .items li:first-child{border-top:0}
-  .iname{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;color:var(--accent);background:none;padding:0}
-  .idesc{color:var(--ink-2);font-size:13px}
+  .iname{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;color:var(--accent-2);background:none;padding:0}
+  .idesc{color:var(--ink-2);font-size:12.5px}
 
-  .empty{border:1px dashed var(--border);background:var(--card);border-radius:12px;padding:28px 20px;text-align:center}
-  .empty-icon{font-size:30px;line-height:1;margin-bottom:8px}
-  .empty-title{margin:0 0 4px;font-weight:600;font-size:15px}
-  .empty-sub{margin:0 auto;color:var(--ink-2);font-size:13px;max-width:46ch}
+  .empty{
+    border:1px dashed var(--border-strong);background:var(--card);
+    border-radius:14px;padding:32px 24px;text-align:center;
+  }
+  .empty-icon{font-size:32px;line-height:1;margin-bottom:10px;filter:saturate(0.8)}
+  .empty-title{margin:0 0 6px;font-weight:600;font-size:15px;color:var(--ink)}
+  .empty-sub{margin:0 auto;color:var(--ink-3);font-size:13px;max-width:48ch;line-height:1.6}
 
-  .connect{margin:32px 0 0}
-  .connect h2{font-size:15px;margin:0 0 4px}
-  .tabs{display:flex;gap:4px;margin:14px 0 10px;border-bottom:1px solid var(--border)}
-  .tab{appearance:none;border:0;background:none;padding:8px 12px;font-size:13px;cursor:pointer;color:var(--ink-2);border-bottom:2px solid transparent;font-weight:500;margin-bottom:-1px}
-  .tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--ink)}
+  .connect{margin:36px 0 0}
+  .connect h2{font-size:14.5px;margin:0 0 4px;letter-spacing:-0.005em}
+  .tabs{display:flex;gap:2px;margin:14px 0 14px;border-bottom:1px solid var(--border)}
+  .tab{
+    appearance:none;border:0;background:none;padding:9px 14px;font-size:13px;cursor:pointer;
+    color:var(--ink-3);border-bottom:2px solid transparent;font-weight:500;margin-bottom:-1px;
+    transition:color .15s
+  }
+  .tab:hover{color:var(--ink-2)}
+  .tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
   .panel{display:none}.panel[data-active="true"]{display:block}
   .panel p{margin:0 0 10px;color:var(--ink-2);font-size:13px}
-  .panel ol{margin:0 0 10px 22px;padding:0;color:var(--ink-2);font-size:13px}
-  .panel ol li{margin:2px 0}
-  pre{position:relative;background:var(--code-bg);color:var(--code-ink);padding:14px 16px;border-radius:10px;overflow:auto;font-size:12.5px;line-height:1.55;margin:0}
-  .code-wrap{position:relative;margin:6px 0 0}
-  .copy{position:absolute;top:8px;right:8px;background:rgba(255,255,255,.08);color:#e2e8f0;border:1px solid rgba(255,255,255,.15);padding:4px 10px;border-radius:6px;font-size:11.5px;cursor:pointer}
-  .copy:hover{background:rgba(255,255,255,.16)}
-  .copy.done{background:#10b981;border-color:#10b981;color:#fff}
-  details{margin-top:24px}
-  summary{cursor:pointer;color:var(--ink-2);font-size:13px;list-style:none;padding:6px 0}
-  summary::before{content:"▸ ";color:var(--ink-3)}
+  .panel ol{margin:0 0 12px 22px;padding:0;color:var(--ink-2);font-size:13px}
+  .panel ol li{margin:3px 0}
+
+  pre{
+    position:relative;background:var(--code-bg);color:var(--code-ink);
+    padding:16px 18px;border-radius:12px;overflow:auto;font-size:12.5px;
+    line-height:1.6;margin:0;
+    border:1px solid var(--border);
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  .code-wrap{position:relative;margin:8px 0 0}
+  .copy{
+    position:absolute;top:10px;right:10px;
+    background:oklch(0.20 0.022 250 / 0.85);color:var(--ink-2);
+    border:1px solid var(--border);padding:5px 11px;border-radius:7px;
+    font-size:11.5px;cursor:pointer;font-weight:500;
+    backdrop-filter:blur(4px);transition:all .15s
+  }
+  .copy:hover{background:oklch(0.24 0.022 250 / 0.95);color:var(--ink);border-color:var(--accent)}
+  .copy.done{background:oklch(0.78 0.16 165 / 0.25);color:var(--live);border-color:oklch(0.78 0.16 165 / 0.5)}
+
+  details{margin-top:28px;border-top:1px solid var(--border);padding-top:10px}
+  summary{cursor:pointer;color:var(--ink-3);font-size:12.5px;list-style:none;padding:6px 0;user-select:none}
+  summary::before{content:"▸ ";color:var(--ink-3);margin-right:2px}
+  summary:hover{color:var(--ink-2)}
   details[open] summary::before{content:"▾ "}
-  .small{font-size:12px;color:var(--ink-3)}
-  code{background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:12.5px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-</style></head><body>
+  .small{font-size:12px;color:var(--ink-3);line-height:1.65}
+  code{
+    background:var(--inline-code-bg);padding:2px 7px;border-radius:5px;
+    font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    color:var(--accent-2);
+    border:1px solid var(--border);
+  }
+  ::selection{background:oklch(0.72 0.14 245 / 0.30);color:var(--ink)}
+</style></head><body class="theme-noir">
 <span class="pill">live</span>
 <h1>${escapeHtml(name)}</h1>
 <p class="meta">${agency ? escapeHtml(agency) + " · " : ""}${toolsCount} tool${toolsCount === 1 ? "" : "s"} · ${resCount} resource${resCount === 1 ? "" : "s"} · slug <code>${escapeHtml(slug)}</code></p>
@@ -387,8 +460,28 @@ ${toolsListHtml}
 }
 
 function notFoundHtml(slug: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"/><title>MCP not found</title>
-<style>body{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:580px;margin:80px auto;padding:0 24px;color:#0f172a;text-align:center}h1{font-size:22px}code{background:#f1f5f9;padding:2px 6px;border-radius:4px}</style>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>MCP not found</title>
+<style>
+  body{
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    max-width:580px;margin:0 auto;padding:120px 24px 80px;
+    color:oklch(0.97 0 0);background:oklch(0.10 0.018 250);
+    text-align:center;min-height:100vh;line-height:1.55;
+    background-image:radial-gradient(60% 40% at 50% 0%, oklch(0.65 0.18 230 / 0.10), transparent 70%);
+    background-attachment:fixed;
+  }
+  h1{font-size:22px;margin:0 0 12px;font-weight:600;letter-spacing:-0.01em}
+  p{color:oklch(0.75 0.012 250);font-size:14px;margin:0}
+  code{
+    background:oklch(0.17 0.022 250 / 0.7);padding:2px 7px;border-radius:5px;
+    font-size:13px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    color:oklch(0.84 0.10 235);
+    border:1px solid oklch(0.28 0.020 250 / 0.55);
+  }
+  strong{color:oklch(0.97 0 0)}
+</style>
 </head><body>
 <h1>MCP server <code>${escapeHtml(slug)}</code> not found</h1>
 <p>Open the builder, click <strong>Publish</strong>, then visit the URL it gives you.</p>
