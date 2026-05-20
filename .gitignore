@@ -1,0 +1,39 @@
+# Dependencies
+node_modules
+
+# Next.js build
+.next
+out
+
+# Env (NEVER commit — real secrets live here)
+.env
+.env.local
+.env*.local
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log
+
+# Vercel
+.vercel
+
+# TypeScript
+next-env.d.ts
+tsconfig.tsbuildinfo
+
+# makemcp runtime caches (file-backed stores from earlier iterations)
+.makemcp-published/
+.makemcp-vectors/
+
+# Local research / inspiration captures from this dev session
+scratch_inspo/
+scratch_unzipped/
+scratch_*.zip
+scratch_*.txt
+scratch
+.playwright-mcp/
+
+# IDE
+.vscode/
+.idea/

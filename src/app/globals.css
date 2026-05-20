@@ -1,0 +1,309 @@
+/* Hallmark · theme: noir-cyan (custom) · genre: modern-minimal
+ * Tokens locked. No inline OKLCH/hex below this block — only `var(--…)`.
+ */
+
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+
+@theme {
+  /* ─── Legacy light tokens (kept for /builder, /servers — do not change) ──*/
+  --color-background: hsl(0 0% 100%);
+  --color-foreground: hsl(222 47% 11%);
+  --color-card: hsl(0 0% 100%);
+  --color-card-foreground: hsl(222 47% 11%);
+  --color-muted: hsl(210 40% 96%);
+  --color-muted-foreground: hsl(215 16% 47%);
+  --color-border: hsl(214 32% 91%);
+  --color-input: hsl(214 32% 91%);
+  --color-ring: hsl(222 47% 11%);
+  --color-primary: hsl(222 47% 11%);
+  --color-primary-foreground: hsl(210 40% 98%);
+  --color-secondary: hsl(210 40% 96%);
+  --color-secondary-foreground: hsl(222 47% 11%);
+  --color-accent: hsl(210 40% 96%);
+  --color-accent-foreground: hsl(222 47% 11%);
+  --color-destructive: hsl(0 84% 60%);
+  --color-destructive-foreground: hsl(210 40% 98%);
+  --color-gov-50: hsl(210 100% 97%);
+  --color-gov-100: hsl(210 95% 93%);
+  --color-gov-500: hsl(212 90% 38%);
+  --color-gov-600: hsl(212 90% 32%);
+  --color-gov-700: hsl(212 90% 26%);
+  --color-gov-900: hsl(212 90% 14%);
+
+  /* ─── noir-cyan: dark surface scale ─────────────────────────────────────*/
+  /* Surfaces ascend by lightness so depth reads correctly.                 */
+  --color-ink-0: oklch(0.10 0.018 250);   /* page bg                        */
+  --color-ink-1: oklch(0.13 0.020 250);   /* card/panel                     */
+  --color-ink-2: oklch(0.17 0.022 250);   /* lifted card / inset            */
+  --color-ink-3: oklch(0.22 0.022 250);   /* hover / focus surface          */
+  --color-ink-border: oklch(0.28 0.020 250 / 0.55);
+  --color-ink-border-strong: oklch(0.36 0.020 250 / 0.85);
+
+  /* Text on ink */
+  --color-ink-text-1: oklch(0.97 0 0);
+  --color-ink-text-2: oklch(0.75 0.012 250);
+  --color-ink-text-3: oklch(0.58 0.014 250);
+
+  /* Accent — anchored on our gov blue, lifted for dark contrast. */
+  --color-accent-1: oklch(0.72 0.14 245);
+  --color-accent-2: oklch(0.84 0.10 235);
+
+  /* Glow palette (used in landing hero) */
+  --color-glow-a: oklch(0.65 0.18 230);   /* cool blue                      */
+  --color-glow-b: oklch(0.62 0.20 285);   /* indigo / violet                */
+  --color-glow-c: oklch(0.70 0.16 195);   /* cyan                           */
+
+  /* Type tokens */
+  --font-sans:
+    var(--font-sans),
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, "Noto Sans", sans-serif;
+  --font-mono:
+    var(--font-mono), ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-display: var(--font-sans);
+
+  --radius-1: 0.5rem;
+  --radius-2: 0.75rem;
+  --radius-3: 1rem;
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+html,
+body {
+  height: 100%;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  font-feature-settings: "rlig" 1, "calt" 1, "ss01" 1;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Any element with `theme-noir` flips the semantic Tailwind tokens to dark.
+ * Children that use `bg-card`, `bg-muted`, `text-foreground` etc. inherit
+ * automatically — no per-file edits needed. Hard-coded utilities like
+ * `bg-white` get explicit overrides below. */
+.theme-noir {
+  --color-background: var(--color-ink-0);
+  --color-foreground: var(--color-ink-text-1);
+  --color-card: var(--color-ink-1);
+  --color-card-foreground: var(--color-ink-text-1);
+  --color-muted: var(--color-ink-2);
+  --color-muted-foreground: var(--color-ink-text-2);
+  --color-border: var(--color-ink-border);
+  --color-input: var(--color-ink-border);
+  --color-ring: var(--color-accent-1);
+  --color-primary: var(--color-accent-1);
+  --color-primary-foreground: var(--color-ink-0);
+  --color-secondary: var(--color-ink-2);
+  --color-secondary-foreground: var(--color-ink-text-1);
+  --color-accent: var(--color-ink-2);
+  --color-accent-foreground: var(--color-ink-text-1);
+
+  background-color: var(--color-ink-0);
+  color: var(--color-ink-text-1);
+}
+
+/* Hard-coded utility overrides inside the noir scope. */
+.theme-noir .bg-white { background-color: var(--color-ink-1); }
+.theme-noir .bg-background { background-color: var(--color-ink-0); }
+.theme-noir .bg-card { background-color: var(--color-ink-1); }
+.theme-noir .bg-muted { background-color: var(--color-ink-2); }
+.theme-noir .bg-muted\/30 { background-color: oklch(0.17 0.022 250 / 0.5); }
+.theme-noir .bg-muted\/40 { background-color: oklch(0.17 0.022 250 / 0.6); }
+.theme-noir .bg-muted\/60 { background-color: oklch(0.17 0.022 250 / 0.8); }
+.theme-noir .text-foreground { color: var(--color-ink-text-1); }
+.theme-noir .text-muted-foreground { color: var(--color-ink-text-3); }
+.theme-noir .border { border-color: var(--color-ink-border); }
+.theme-noir .border-input { border-color: var(--color-ink-border); }
+.theme-noir .border-border { border-color: var(--color-ink-border); }
+.theme-noir * { border-color: var(--color-ink-border); }
+
+/* shadcn Input/Textarea — the file uses bg-background already, fine — but
+ * make sure focus rings render against the dark surface. */
+.theme-noir input,
+.theme-noir textarea {
+  color: var(--color-ink-text-1);
+}
+.theme-noir input::placeholder,
+.theme-noir textarea::placeholder {
+  color: var(--color-ink-text-3);
+}
+
+/* Buttons whose variant=default uses gov-600 read fine on dark already; the
+ * outline + ghost variants pick up the new --color-border via the `border`
+ * override above. */
+
+/* Dotted canvas backdrop — switch from dark dots on light to light dots
+ * on dark, so ReactFlow's empty area reads correctly. */
+.theme-noir .canvas-bg {
+  background-image: radial-gradient(
+    circle,
+    oklch(1 0 0 / 0.06) 1px,
+    transparent 1px
+  );
+}
+
+/* Badge variants — the success/warning pills bake `bg-emerald-100` /
+ * `bg-amber-100` + dark text directly into the cva config, so override the
+ * combination inside noir scope. */
+.theme-noir .bg-emerald-100 { background-color: oklch(0.55 0.16 155 / 0.20); }
+.theme-noir .text-emerald-800 { color: oklch(0.85 0.14 155); }
+.theme-noir .bg-amber-100 { background-color: oklch(0.70 0.16 70 / 0.20); }
+.theme-noir .text-amber-800 { color: oklch(0.88 0.14 75); }
+
+/* ReactFlow controls + minimap chrome */
+.theme-noir .react-flow__controls,
+.theme-noir .react-flow__minimap {
+  background: var(--color-ink-1) !important;
+  border-color: var(--color-ink-border) !important;
+}
+.theme-noir .react-flow__controls-button {
+  background: var(--color-ink-1) !important;
+  border-bottom: 1px solid var(--color-ink-border) !important;
+  color: var(--color-ink-text-2) !important;
+  fill: var(--color-ink-text-2) !important;
+}
+.theme-noir .react-flow__controls-button:hover {
+  background: var(--color-ink-2) !important;
+}
+.theme-noir .react-flow__minimap-mask {
+  fill: oklch(0.10 0.018 250 / 0.6) !important;
+}
+
+.react-flow__node {
+  font-family: var(--font-sans);
+}
+.react-flow__attribution {
+  display: none !important;
+}
+
+.canvas-bg {
+  background-image: radial-gradient(
+    circle,
+    rgba(15, 23, 42, 0.08) 1px,
+    transparent 1px
+  );
+  background-size: 18px 18px;
+}
+
+/* ─── noir-cyan utilities ───────────────────────────────────────────────── */
+
+/* The hero glow: two soft conic gradients layered, low saturation, large blur.
+ * Not a "spotlight under the headline" — that's the slop default. This is a
+ * weather front behind the entire stack. */
+.noir-aurora {
+  position: absolute;
+  inset: -20% -10% auto -10%;
+  height: 70vh;
+  pointer-events: none;
+  z-index: 0;
+  filter: blur(80px) saturate(140%);
+  opacity: 0.55;
+  background:
+    radial-gradient(40% 60% at 20% 30%, var(--color-glow-a) 0%, transparent 60%),
+    radial-gradient(45% 65% at 75% 25%, var(--color-glow-b) 0%, transparent 60%),
+    radial-gradient(40% 55% at 55% 80%, var(--color-glow-c) 0%, transparent 65%);
+}
+
+/* Subtle ambient grain on dark surfaces — hides banding, adds tactile feel.
+ * Pure CSS, no image dependency. */
+.noir-grain {
+  position: relative;
+}
+.noir-grain::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.04;
+  mix-blend-mode: overlay;
+  background-image: radial-gradient(
+    oklch(1 0 0 / 0.8) 1px,
+    transparent 1px
+  );
+  background-size: 3px 3px;
+}
+
+.noir-divider {
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--color-ink-border-strong),
+    transparent
+  );
+}
+
+/* Selectable input on dark surface. */
+.noir-input {
+  background: var(--color-ink-1);
+  color: var(--color-ink-text-1);
+  border: 1px solid var(--color-ink-border);
+  border-radius: var(--radius-2);
+  padding: 0.625rem 0.875rem;
+  font-size: 0.9375rem;
+  line-height: 1.45;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.noir-input::placeholder {
+  color: var(--color-ink-text-3);
+}
+.noir-input:focus,
+.noir-input:focus-visible {
+  outline: none;
+  border-color: var(--color-accent-1);
+  box-shadow: 0 0 0 4px oklch(from var(--color-accent-1) l c h / 0.15);
+}
+
+.noir-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1rem;
+  border-radius: 9999px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  background: var(--color-ink-text-1);
+  color: var(--color-ink-0);
+  transition: transform 120ms ease, background 120ms ease;
+}
+.noir-btn:hover {
+  background: oklch(from var(--color-ink-text-1) calc(l - 0.04) c h);
+}
+.noir-btn:active {
+  transform: translateY(1px);
+}
+
+.noir-btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.875rem;
+  border-radius: 9999px;
+  font-size: 0.8125rem;
+  color: var(--color-ink-text-2);
+  border: 1px solid var(--color-ink-border);
+  background: var(--color-ink-1);
+  transition: color 120ms, border-color 120ms, background 120ms;
+}
+.noir-btn-ghost:hover {
+  color: var(--color-ink-text-1);
+  border-color: var(--color-ink-border-strong);
+  background: var(--color-ink-2);
+}
+
+@keyframes noir-caret {
+  50% { opacity: 0; }
+}
+
+/* Mobile floor — Hallmark gate 36 / 62. Stop any rogue horizontal scroll. */
+html,
+body {
+  overflow-x: clip;
+}

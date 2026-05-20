@@ -1,0 +1,32 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "buildCommand": "next build",
+  "installCommand": "npm install",
+  "functions": {
+    "src/app/api/agent/turn/route.ts": { "maxDuration": 90 },
+    "src/app/api/docs/index/route.ts": { "maxDuration": 300 },
+    "src/app/api/export/route.ts": { "maxDuration": 60 },
+    "src/app/api/test/run/route.ts": { "maxDuration": 60 },
+    "src/app/api/test/health/route.ts": { "maxDuration": 30 },
+    "src/app/api/mcp/[slug]/route.ts": { "maxDuration": 60 },
+    "src/app/api/db/discover/route.ts": { "maxDuration": 30 }
+  },
+  "headers": [
+    {
+      "source": "/api/mcp/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store" },
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        {
+          "key": "Access-Control-Allow-Methods",
+          "value": "GET, POST, OPTIONS"
+        },
+        {
+          "key": "Access-Control-Allow-Headers",
+          "value": "Content-Type, Authorization"
+        }
+      ]
+    }
+  ]
+}
