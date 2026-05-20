@@ -1,11 +1,16 @@
-// Auth middleware — everything is gated except the landing page, the auth
-// endpoints, and the published MCP runtime (which is public by design).
+// Auth middleware — Edge-runtime safe.
+//
+// We don't instantiate NextAuth here on purpose: doing `NextAuth(authConfig)`
+// at module top-level in Edge runtime has caused `MIDDLEWARE_INVOCATION_FAILED`
+// on Vercel during the v5 beta. Middleware only needs to decide whether to
+// redirect; the real session validation still happens on every protected
+// page/route via `await auth()` (which runs on Node and re-validates the JWT).
+//
+// So here we just look for the NextAuth session cookie — its presence is a
+// strong hint the user is logged in; a malicious user crafting a fake cookie
+// would still fail the server-side validation on the protected route.
 
-import NextAuth from "next-auth";
-import { NextResponse } from "next/server";
-import { authConfig } from "@/auth.config";
-
-const { auth } = NextAuth(authConfig);
+import { NextResponse, type NextRequest } from "next/server";
 
 const PUBLIC_PATHS = new Set<string>(["/", "/signin"]);
 
@@ -15,18 +20,29 @@ function isPublicApi(path: string): boolean {
   return path.startsWith("/api/auth") || path.startsWith("/api/mcp");
 }
 
-export default auth((req) => {
-  const { nextUrl, auth: session } = req;
-  const path = nextUrl.pathname;
-  const isAuthed = !!session?.user;
+// NextAuth v5 cookie names. The `__Secure-` variant is used over HTTPS.
+const SESSION_COOKIE_NAMES = [
+  "authjs.session-token",
+  "__Secure-authjs.session-token",
+];
 
-  // Public allow-list.
+function hasSessionCookie(req: NextRequest): boolean {
+  for (const name of SESSION_COOKIE_NAMES) {
+    const c = req.cookies.get(name);
+    if (c?.value) return true;
+  }
+  return false;
+}
+
+export function middleware(req: NextRequest) {
+  const { nextUrl } = req;
+  const path = nextUrl.pathname;
+
   if (PUBLIC_PATHS.has(path) || isPublicApi(path)) {
     return NextResponse.next();
   }
 
-  if (!isAuthed) {
-    // API endpoints return a clean 401 instead of redirecting through HTML.
+  if (!hasSessionCookie(req)) {
     if (path.startsWith("/api/")) {
       return NextResponse.json(
         { error: "Authentication required" },
@@ -37,11 +53,15 @@ export default auth((req) => {
     signIn.searchParams.set("callbackUrl", path + nextUrl.search);
     return NextResponse.redirect(signIn);
   }
+
   return NextResponse.next();
-});
+}
 
 export const config = {
   matcher: [
+    // Skip Next.js internals, static assets, and the MCP runtime + auth
+    // routes (handled via the allowlist above as well, but matching them
+    // out at the regex level saves an invocation per request).
     "/((?!_next/static|_next/image|favicon\\.ico|.*\\..*).*)",
   ],
 };

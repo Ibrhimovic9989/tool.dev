@@ -37,3 +37,5 @@ scratch
 # IDE
 .vscode/
 .idea/
+
+.vercel
