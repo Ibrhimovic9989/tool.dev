@@ -13,6 +13,8 @@ import { eq, asc } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { getDb, schema } from "@/db/client";
 import { TOOLS, runTool, type ToolContext } from "./tools";
+import { getProject } from "@/lib/server/projects-service";
+import type { McpProject } from "@/lib/types";
 
 const ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT;
 const KEY = process.env.AZURE_OPENAI_API_KEY;
@@ -24,15 +26,61 @@ const MAX_ITERATIONS = 6;
 
 const SYSTEM_PROMPT = `You are makemcp.dev's onboarding agent. You build MCP (Model Context Protocol) servers on behalf of non-technical government and SaaS users.
 
-You drive a project state by calling tools. Always:
-- Call create_project FIRST before any other tool. Confirm with the user briefly.
+You drive a project state by calling tools.
+
+Project context rules — read carefully:
+- If a "Current project" block is present below, that is the ACTIVE project. NEVER call create_project in that case; just modify it.
+- Only call create_project when there is NO current project AND the user is starting fresh.
+- If the user has uploaded files in chat (look for an existing source.documents node with a 'chat_uploads' collection), DO NOT add another documents source — the files are already indexed. Just confirm and continue.
+
+General rules:
 - Be conservative: prefer a tight, working setup (one DB or one API plus discovery) over a sprawling one.
 - After adding a database, run discover_database_tables in the same turn.
 - Never invent credentials. If the user hasn't given them, ask once and stop.
 - Publish only when the user explicitly asks, or when every source is ready and the user has confirmed.
 - Reply to the user in plain language. Don't echo connection strings or passwords back at them.
+- Users CAN drag-and-drop files directly into the chat. Don't tell them they have to use a separate panel.
 
 Tool calls are server-executed and the results are visible to you. The user sees a separate canvas reflecting the current project. Keep your final text replies short — the canvas already shows what changed.`;
+
+function summarizeProject(project: McpProject): string {
+  const lines: string[] = [];
+  lines.push(`Current project: "${project.name}" (id=${project.id})`);
+  if (project.agency) lines.push(`Agency: ${project.agency}`);
+  if (project.description) lines.push(`Purpose: ${project.description}`);
+  const sources = project.nodes.filter((n) => n.data.kind !== "output.mcp");
+  if (sources.length === 0) {
+    lines.push("Sources: (none yet — add one before publishing)");
+  } else {
+    lines.push(`Sources (${sources.length}):`);
+    for (const n of sources) {
+      const d = n.data;
+      if (d.kind === "source.documents") {
+        const cols = d.collections
+          .map((c) => `${c.resourceName}(${c.files.length} files)`)
+          .join(", ");
+        lines.push(`  - documents '${d.name}': ${cols || "no collections"} [status=${d.status}]`);
+      } else if (d.kind === "source.database") {
+        lines.push(
+          `  - database '${d.name}': ${d.host}/${d.database}, ${d.tables.filter((t) => t.enabled).length} tables [status=${d.status}]`,
+        );
+      } else if (d.kind === "source.rest") {
+        lines.push(
+          `  - rest '${d.name}': ${d.baseUrl}, ${d.endpoints.filter((e) => e.enabled).length} endpoints [status=${d.status}]`,
+        );
+      } else if (d.kind === "source.webpage") {
+        lines.push(
+          `  - webpage '${d.name}': ${d.targets.filter((t) => t.enabled).length} targets [status=${d.status}]`,
+        );
+      }
+    }
+  }
+  const output = project.nodes.find((n) => n.data.kind === "output.mcp");
+  if (output && output.data.kind === "output.mcp") {
+    lines.push(`Output slug: ${output.data.slug} (status=${output.data.status})`);
+  }
+  return lines.join("\n");
+}
 
 type ChatMessage =
   | { role: "system"; content: string }
@@ -99,7 +147,20 @@ export async function runAgentTurn(
     .where(eq(schema.messages.conversationId, input.conversationId))
     .orderBy(asc(schema.messages.createdAt));
 
-  const wire: ChatMessage[] = [{ role: "system", content: SYSTEM_PROMPT }];
+  // If we already have a current project, dump its current state into the
+  // system message so the model doesn't try to re-create it from scratch.
+  let systemContent = SYSTEM_PROMPT;
+  if (input.currentProjectId) {
+    const current = await getProject(
+      { userId: input.userId },
+      input.currentProjectId,
+    ).catch(() => null);
+    if (current) {
+      systemContent += `\n\n--- Active project state ---\n${summarizeProject(current)}\n--- end ---`;
+    }
+  }
+
+  const wire: ChatMessage[] = [{ role: "system", content: systemContent }];
   for (const m of history) {
     if (m.role === "user") {
       wire.push({ role: "user", content: m.content ?? "" });

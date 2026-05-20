@@ -344,6 +344,65 @@ async function toolAddDocumentsSource(
   const resourceName = String(args.resourceName ?? "documents")
     .replace(/[^a-z0-9_]/gi, "_")
     .toLowerCase();
+
+  const existing = await getProject({ userId: ctx.userId }, ctx.currentProjectId);
+  if (!existing) {
+    return { message: "Project not found.", isError: true };
+  }
+  const existingDocsNode = existing.nodes.find(
+    (n) => n.data.kind === "source.documents",
+  );
+
+  // Path 1: a Documents node already exists. Reuse it — and reuse or add a
+  // collection with the requested resourceName. This is the common case
+  // after the user drops files into chat (which mints a 'chat_uploads'
+  // collection client-side and indexes against it).
+  if (existingDocsNode && existingDocsNode.data.kind === "source.documents") {
+    const docsData = existingDocsNode.data;
+    const fileCount = docsData.collections.reduce(
+      (n, c) => n + c.files.length,
+      0,
+    );
+    const existingCollection = docsData.collections.find(
+      (c) => c.resourceName === resourceName,
+    );
+    if (existingCollection) {
+      return {
+        message: `A Documents source already exists with the '${resourceName}' collection (${existingCollection.files.length} file(s) so far). Nothing to add — files dropped into chat or the right-hand panel land here automatically.`,
+        data: {
+          nodeId: existingDocsNode.id,
+          collectionId: existingCollection.id,
+          reused: true,
+        },
+      };
+    }
+    // Add a new collection inside the existing node
+    const newCollection = {
+      id: nanoid(8),
+      resourceName,
+      description: String(args.name ?? ""),
+      files: [],
+      chunkSize: 1000,
+      enabled: true,
+    };
+    const docsNodeId = existingDocsNode.id;
+    await updateProjectGraph({ userId: ctx.userId }, ctx.currentProjectId, (p) => {
+      const node = p.nodes.find((n) => n.id === docsNodeId);
+      if (!node || node.data.kind !== "source.documents") return;
+      node.data.collections = [...node.data.collections, newCollection];
+    });
+    return {
+      message: `Added a new '${resourceName}' collection to the existing Documents source (it already had ${fileCount} file(s) across other collections). Files dropped into chat will index into 'chat_uploads' by default; you can move them later from the right-hand panel.`,
+      data: {
+        nodeId: existingDocsNode.id,
+        collectionId: newCollection.id,
+        reused: true,
+      },
+      projectUpdated: true,
+    };
+  }
+
+  // Path 2: no Documents node yet — create one with the requested collection.
   const node = createNode("source.documents", { x: 80, y: 80 });
   const data = node.data as DocumentsSourceData & { kind: "source.documents" };
   data.name = String(args.name ?? "Documents");
@@ -359,7 +418,7 @@ async function toolAddDocumentsSource(
   ];
   await addNodeToProject({ userId: ctx.userId }, ctx.currentProjectId, node);
   return {
-    message: `Added Documents node '${data.name}' with an empty '${resourceName}' collection. The user uploads files from the right-hand panel — I can't upload from chat.`,
+    message: `Added Documents node '${data.name}' with an empty '${resourceName}' collection. The user can drop files directly into the chat or use the right-hand panel; either way they'll be indexed into this collection.`,
     data: { nodeId: node.id, collectionId: data.collections[0].id },
     projectUpdated: true,
   };
