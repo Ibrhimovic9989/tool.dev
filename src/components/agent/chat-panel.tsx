@@ -117,6 +117,11 @@ export function ChatPanel({
   // node, minting the node itself if there isn't one yet. Returns the
   // collection id. Mutates the Zustand store directly because the chat panel
   // doesn't have a write callback for partial project edits.
+  //
+  // Also ensures there's an edge from the Documents node to the MCP output
+  // node — without it, connectedSources() ignores the source at runtime and
+  // listTools returns []. This caused several user-reported "no tools"
+  // bugs on published MCPs that *did* have indexed files.
   const ensureChatCollection = (projectId: string): string => {
     const state = useBuilder.getState();
     const project = state.projects[projectId];
@@ -124,13 +129,21 @@ export function ChatPanel({
 
     let docNode = project.nodes.find((n) => n.data.kind === "source.documents");
     if (!docNode) {
-      // Place it to the left of the canvas where the user can see it.
       const newId = state.addNode("source.documents", { x: 240, y: 360 });
       const refreshed = useBuilder.getState().projects[projectId];
       docNode = refreshed?.nodes.find((n) => n.id === newId);
     }
     if (!docNode || docNode.data.kind !== "source.documents") {
       throw new Error("Couldn't ensure a Documents source");
+    }
+
+    // Wire the docs node into the MCP output if it isn't already.
+    const outputNode = project.nodes.find((n) => n.data.kind === "output.mcp");
+    if (outputNode) {
+      const alreadyWired = project.edges.some(
+        (e) => e.source === docNode!.id && e.target === outputNode.id,
+      );
+      if (!alreadyWired) state.connect(docNode.id, outputNode.id);
     }
 
     const existing = docNode.data.collections.find(
