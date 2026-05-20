@@ -156,6 +156,45 @@ body {
 .theme-noir .bg-amber-100 { background-color: oklch(0.70 0.16 70 / 0.20); }
 .theme-noir .text-amber-800 { color: oklch(0.88 0.14 75); }
 
+/* Chat agent tool-result cards. Light + dark themed via a single class so the
+ * agent transcript stays legible without per-class noir overrides for every
+ * shade of emerald/red. */
+.tool-result-card.is-ok {
+  background-color: oklch(0.97 0.025 155);
+  border-color: oklch(0.85 0.08 155);
+}
+.tool-result-card.is-ok .tool-result-title { color: oklch(0.30 0.10 155); }
+.tool-result-card.is-ok .tool-result-body { color: oklch(0.36 0.07 155); }
+.tool-result-card.is-error {
+  background-color: oklch(0.97 0.025 25);
+  border-color: oklch(0.85 0.10 25);
+}
+.tool-result-card.is-error .tool-result-title { color: oklch(0.36 0.14 25); }
+.tool-result-card.is-error .tool-result-body { color: oklch(0.42 0.10 25); }
+
+.theme-noir .tool-result-card.is-ok {
+  background-color: oklch(0.55 0.16 155 / 0.14);
+  border-color: oklch(0.55 0.16 155 / 0.35);
+}
+.theme-noir .tool-result-card.is-ok .tool-result-title { color: oklch(0.88 0.15 155); }
+.theme-noir .tool-result-card.is-ok .tool-result-body { color: oklch(0.92 0.05 155); }
+.theme-noir .tool-result-card.is-error {
+  background-color: oklch(0.55 0.18 25 / 0.16);
+  border-color: oklch(0.55 0.18 25 / 0.40);
+}
+.theme-noir .tool-result-card.is-error .tool-result-title { color: oklch(0.85 0.16 25); }
+.theme-noir .tool-result-card.is-error .tool-result-body { color: oklch(0.92 0.06 25); }
+
+/* Tool-call (in-progress) card inner <pre> — the white-bg + light text pair
+ * disappears in dark mode; flip the pre to ink tokens inside noir scope. */
+.theme-noir .agent-arg-block,
+.theme-noir [class*="bg-muted/30"] pre,
+.theme-noir [class*="bg-muted/40"] pre {
+  background-color: var(--color-ink-0) !important;
+  color: var(--color-ink-text-2) !important;
+  border-color: var(--color-ink-border) !important;
+}
+
 /* ReactFlow controls + minimap chrome */
 .theme-noir .react-flow__controls,
 .theme-noir .react-flow__minimap {

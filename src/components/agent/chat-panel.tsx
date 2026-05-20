@@ -558,29 +558,33 @@ function EventRow({ e }: { e: AgentEvent }) {
       <div className="flex justify-start">
         <div
           className={cn(
-            "max-w-[90%] rounded-2xl rounded-tl-md px-3 py-2 text-[13px] leading-relaxed whitespace-pre-wrap border",
+            "max-w-[90%] rounded-2xl rounded-tl-md px-3 py-2 text-[13px] leading-relaxed border",
             e.isError
               ? "bg-red-50 border-red-200 text-red-900"
               : "bg-muted/40",
           )}
         >
-          {e.text}
+          {e.isError ? (
+            <span className="whitespace-pre-wrap">{e.text}</span>
+          ) : (
+            <RichText text={e.text ?? ""} />
+          )}
         </div>
       </div>
     );
   }
   if (e.kind === "tool_call") {
     return (
-      <div className="rounded-lg border bg-muted/30 px-3 py-2 text-[12px]">
+      <div className="rounded-lg border bg-muted/30 px-3 py-2 text-[12px] overflow-hidden">
         <div className="flex items-center gap-2 font-medium">
           <Wrench className="size-3 text-gov-600" />
-          <span className="font-mono">{e.toolName}</span>
+          <span className="font-mono truncate">{e.toolName}</span>
           <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
             running
           </span>
         </div>
         {e.toolArgs && Object.keys(e.toolArgs).length > 0 && (
-          <pre className="mt-1.5 overflow-x-auto rounded bg-white p-2 font-mono text-[11px] text-muted-foreground border">
+          <pre className="mt-1.5 rounded bg-white p-2 font-mono text-[11px] text-muted-foreground border whitespace-pre-wrap break-words">
             {JSON.stringify(redact(e.toolArgs), null, 2)}
           </pre>
         )}
@@ -591,8 +595,8 @@ function EventRow({ e }: { e: AgentEvent }) {
     return (
       <div
         className={cn(
-          "rounded-lg border px-3 py-2 text-[12px] flex items-start gap-2.5",
-          e.isError ? "border-red-200 bg-red-50" : "border-emerald-200 bg-emerald-50",
+          "tool-result-card rounded-lg border px-3 py-2 text-[12px] flex items-start gap-2.5",
+          e.isError ? "is-error" : "is-ok",
         )}
       >
         {e.isError ? (
@@ -601,21 +605,137 @@ function EventRow({ e }: { e: AgentEvent }) {
           <CheckCircle2 className="size-3.5 mt-0.5 shrink-0 text-emerald-600" />
         )}
         <div className="min-w-0 flex-1">
-          <div
-            className={cn(
-              "font-medium",
-              e.isError ? "text-red-900" : "text-emerald-900",
-            )}
-          >
+          <div className="tool-result-title font-medium">
             <span className="font-mono text-[11px]">{e.toolName}</span>{" "}
             <span className="opacity-70">{e.isError ? "failed" : "done"}</span>
           </div>
-          <div className="opacity-80 mt-0.5">{e.toolResult?.message}</div>
+          <div className="tool-result-body mt-0.5 break-words">
+            {e.toolResult?.message}
+          </div>
         </div>
       </div>
     );
   }
   return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Inline markdown renderer (purposefully tiny — the agent emits **bold**,
+// *italic*, `code`, [text](url), and dash-bullets. Anything fancier renders
+// as plain text rather than pulling in a 30KB dep.)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function RichText({ text }: { text: string }) {
+  const paras = text.split(/\n{2,}/);
+  return (
+    <div className="space-y-2">
+      {paras.map((para, i) => {
+        const lines = para.split("\n");
+        const isList =
+          lines.filter((l) => l.trim()).every((l) => /^\s*[-*]\s+/.test(l));
+        if (isList) {
+          return (
+            <ul key={i} className="list-disc space-y-0.5 pl-5">
+              {lines
+                .filter((l) => l.trim())
+                .map((l, j) => (
+                  <li key={j}>{renderInline(l.replace(/^\s*[-*]\s+/, ""))}</li>
+                ))}
+            </ul>
+          );
+        }
+        return (
+          <p key={i} className="whitespace-pre-wrap break-words">
+            {lines.map((l, j) => (
+              <span key={j}>
+                {renderInline(l)}
+                {j < lines.length - 1 && <br />}
+              </span>
+            ))}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
+function renderInline(s: string): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  let i = 0;
+  let key = 0;
+  while (i < s.length) {
+    // `code`
+    if (s[i] === "`") {
+      const end = s.indexOf("`", i + 1);
+      if (end > i) {
+        out.push(
+          <code
+            key={key++}
+            className="rounded bg-muted/60 px-1 py-[1px] font-mono text-[11.5px]"
+          >
+            {s.slice(i + 1, end)}
+          </code>,
+        );
+        i = end + 1;
+        continue;
+      }
+    }
+    // **bold**
+    if (s.startsWith("**", i)) {
+      const end = s.indexOf("**", i + 2);
+      if (end > i + 2) {
+        out.push(<strong key={key++}>{s.slice(i + 2, end)}</strong>);
+        i = end + 2;
+        continue;
+      }
+    }
+    // *italic* — only when preceded by start/space and followed by non-space
+    if (
+      s[i] === "*" &&
+      s[i + 1] !== "*" &&
+      s[i + 1] !== " " &&
+      (i === 0 || /\s|\(/.test(s[i - 1]))
+    ) {
+      const end = s.indexOf("*", i + 1);
+      if (end > i + 1) {
+        out.push(<em key={key++}>{s.slice(i + 1, end)}</em>);
+        i = end + 1;
+        continue;
+      }
+    }
+    // [text](url)
+    if (s[i] === "[") {
+      const match = s.slice(i).match(/^\[([^\]]+)\]\(([^)\s]+)\)/);
+      if (match) {
+        out.push(
+          <a
+            key={key++}
+            href={match[2]}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline decoration-dotted underline-offset-2 hover:decoration-solid"
+          >
+            {match[1]}
+          </a>,
+        );
+        i += match[0].length;
+        continue;
+      }
+    }
+    // Plain run — accumulate until the next markup char
+    let end = i + 1;
+    while (
+      end < s.length &&
+      s[end] !== "`" &&
+      !(s[end] === "*" && (s[end + 1] === "*" || /\s|^/.test(s[end - 1]))) &&
+      s[end] !== "["
+    ) {
+      end++;
+    }
+    out.push(s.slice(i, end));
+    i = end;
+  }
+  return out;
 }
 
 function Welcome({
