@@ -41,6 +41,10 @@ Honesty:
 - Never invent credentials, hostnames, or API keys. If the user hasn't given them, ask once.
 - Users CAN drag-and-drop files directly into the chat. They do NOT need a separate panel.
 
+Bias to action:
+- When the user names a source type ("my PDFs", "this database", "our API", "make my documents searchable"), call add_source with the right kind IMMEDIATELY. Don't ask for permission. The canvas can be edited later.
+- Only ask a question when something genuinely cannot be inferred (e.g. a missing connection string or auth token).
+
 Publishing:
 - Only call publish_project when the user has asked for it (or it's the obvious next step after a successful health check).
 - publish_project server-enforces a full health check — if it refuses, the project really isn't ready. Don't retry; tell the user what's missing.
@@ -280,7 +284,16 @@ export async function runAgentTurn(
   let projectChanged = false;
 
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
-    const reply = await callModel(wire);
+    // Recompute the available tools each iteration — adding a source mid-
+    // loop changes which tools are valid (e.g. publish_project unlocks).
+    const currentProject = ctx.currentProjectId
+      ? await getProject(
+          { userId: input.userId },
+          ctx.currentProjectId,
+        ).catch(() => null)
+      : null;
+    const availableTools = filterTools(currentProject);
+    const reply = await callModel(wire, availableTools);
     // Persist assistant turn (may be tool-call-only with empty content).
     await db.insert(schema.messages).values({
       id: `m_${nanoid(10)}`,
@@ -379,9 +392,36 @@ interface ModelReply {
   }[];
 }
 
-async function callModel(messages: ChatMessage[]): Promise<ModelReply> {
+/**
+ * Filter the tool catalog by current project state. Harness-engineering at
+ * the tool-exposure layer: the model literally can't call a tool it doesn't
+ * see, which beats trusting it to obey a prose rule.
+ *
+ *   - publish_project — only when there's a source to publish
+ *   - create_project — only when there's no active project
+ *   - discover_database_tables — only when a database source already exists
+ */
+function filterTools(project: McpProject | null): typeof TOOLS {
+  const hasProject = !!project;
+  const sources = project
+    ? project.nodes.filter((n) => n.data.kind !== "output.mcp")
+    : [];
+  const hasSource = sources.length > 0;
+  const hasDatabase = sources.some((n) => n.data.kind === "source.database");
+  return TOOLS.filter((t) => {
+    if (t.name === "create_project" && hasProject) return false;
+    if (t.name === "publish_project" && !hasSource) return false;
+    if (t.name === "discover_database_tables" && !hasDatabase) return false;
+    return true;
+  });
+}
+
+async function callModel(
+  messages: ChatMessage[],
+  toolList: typeof TOOLS,
+): Promise<ModelReply> {
   const url = `${ENDPOINT}/openai/deployments/${DEPLOYMENT}/chat/completions?api-version=${API_VERSION}`;
-  const tools = TOOLS.map((t) => ({
+  const tools = toolList.map((t) => ({
     type: "function" as const,
     function: {
       name: t.name,
