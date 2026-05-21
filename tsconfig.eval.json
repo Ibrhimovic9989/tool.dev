@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "moduleResolution": "node",
+    "paths": {
+      "@/*": ["./src/*"],
+      "server-only": ["./src/lib/agent/evals/server-only-stub.ts"]
+    }
+  }
+}

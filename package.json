@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "eval": "tsx --tsconfig tsconfig.json -r tsconfig-paths/register src/lib/agent/evals/run.ts"
+    "eval": "tsx --tsconfig tsconfig.eval.json -r tsconfig-paths/register src/lib/agent/evals/run.ts"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.11.2",
@@ -46,6 +46,7 @@
     "@types/react-dom": "^19.0.2",
     "dotenv": "^16.4.7",
     "drizzle-kit": "^0.31.10",
+    "server-only": "^0.0.1",
     "tailwindcss": "^4.0.0",
     "tsconfig-paths": "^4.2.0",
     "tsx": "^4.19.2",
