@@ -60,7 +60,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "create_project",
     description:
-      "Start a new MCP project for the user. Required as the first step before any other source or publish call. Sets the active project.",
+      "Start a new MCP project for the user. Only call when there is NO active project. If one exists, this tool will refuse — modify the existing project instead.",
     parameters: {
       type: "object",
       properties: {
@@ -72,82 +72,73 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
-    name: "add_database_source",
+    name: "add_source",
     description:
-      "Connect a PostgreSQL database to the current project. Accepts a postgres:// connection string; the password is parsed out and stored as DB_PASSWORD in the project's secrets (never echoed back).",
+      "Attach a data source to the current project. For databases, also auto-discovers tables and registers each as a tool — no separate discovery call needed. Reuses an existing source of the same kind when present (e.g. a Documents source created by chat uploads).",
     parameters: {
       type: "object",
       properties: {
-        connectionString: {
+        kind: {
           type: "string",
-          description: "Full postgres:// or postgresql:// URL with credentials",
+          enum: ["database", "rest", "documents"],
+          description:
+            "What kind of source to attach. 'database' for Postgres connection strings; 'rest' for HTTP APIs; 'documents' for PDF/Word/text files.",
         },
         name: {
           type: "string",
-          description: "Optional friendly name for this database node",
+          description: "Friendly name for this source (optional).",
+        },
+        // database
+        connectionString: {
+          type: "string",
+          description:
+            "kind='database' only. Full postgres:// or postgresql:// URL with credentials.",
+        },
+        // rest
+        baseUrl: {
+          type: "string",
+          description: "kind='rest' only. https://api.example.com",
+        },
+        authKind: {
+          type: "string",
+          enum: ["none", "apiKey", "bearer", "basic"],
+          description: "kind='rest' only.",
+        },
+        authHeaderName: {
+          type: "string",
+          description: "kind='rest' with apiKey only, e.g. 'X-API-Key'.",
+        },
+        authEnvVar: {
+          type: "string",
+          description:
+            "kind='rest' only. Env var name where the token lives, e.g. 'API_TOKEN'.",
+        },
+        // documents
+        resourceName: {
+          type: "string",
+          description:
+            "kind='documents' only. snake_case collection id (e.g. 'policies'). Defaults to 'documents'.",
         },
       },
-      required: ["connectionString"],
+      required: ["kind"],
     },
   },
   {
     name: "discover_database_tables",
     description:
-      "List every table in the public schema of the currently-attached database, register each as an MCP tool the user can expose. Requires that add_database_source has run first and that the password is in secrets.",
+      "Re-run table discovery on the project's existing database source. Use only if the schema changed since the database was first added; add_source already discovers on attach.",
     parameters: { type: "object", properties: {} },
-  },
-  {
-    name: "add_rest_source",
-    description:
-      "Attach a REST API to the project. Endpoints can be added later via the builder UI (or a future OpenAPI tool). Stores no secret unless authEnvVar is provided.",
-    parameters: {
-      type: "object",
-      properties: {
-        baseUrl: { type: "string", description: "https://api.example.com" },
-        name: { type: "string" },
-        authKind: {
-          type: "string",
-          enum: ["none", "apiKey", "bearer", "basic"],
-        },
-        authHeaderName: {
-          type: "string",
-          description: "Only for apiKey auth, e.g. 'X-API-Key'",
-        },
-        authEnvVar: {
-          type: "string",
-          description: "Env var name where the token lives, e.g. 'API_TOKEN'",
-        },
-      },
-      required: ["baseUrl"],
-    },
-  },
-  {
-    name: "add_documents_source",
-    description:
-      "Add a Documents node so the user can upload PDFs / Office files / images later. Doesn't index anything by itself.",
-    parameters: {
-      type: "object",
-      properties: {
-        name: { type: "string" },
-        resourceName: {
-          type: "string",
-          description:
-            "snake_case identifier for the collection (e.g. 'policies'). Defaults to 'documents'.",
-        },
-      },
-      required: [],
-    },
   },
   {
     name: "check_project_health",
     description:
-      "Inspect the current project and report which sources are connected, how many MCP tools it currently exposes, and any issues that would cause publish to produce an empty server. ALWAYS call this before publish_project so you can fix problems instead of shipping a broken MCP.",
+      "Inspect the current project and report sources, exposed tool count, and any blockers. Optional — publish_project enforces the same check server-side regardless.",
     parameters: { type: "object", properties: {} },
   },
   {
     name: "publish_project",
     description:
-      "Persist the current project to the live MCP runtime. Verifies the published snapshot exposes at least one tool before declaring success — refuses with an actionable error if it would publish an empty server.",
+      "Persist the current project to the live MCP runtime. Runs the full health check server-side and refuses if any blocker would result in a useless MCP — you don't have to call check_project_health first.",
     parameters: { type: "object", properties: {} },
   },
 ];
@@ -163,14 +154,19 @@ export async function runTool(
     switch (name) {
       case "create_project":
         return await toolCreateProject(ctx, args);
+      case "add_source":
+        return await toolAddSource(ctx, args);
+      // Backwards-compat: old conversation history may replay these names.
+      // Route them to add_source so we don't lose continuity, but the model
+      // only sees `add_source` in its current tool catalog.
       case "add_database_source":
-        return await toolAddDatabaseSource(ctx, args);
+        return await toolAddSource(ctx, { kind: "database", ...args });
+      case "add_rest_source":
+        return await toolAddSource(ctx, { kind: "rest", ...args });
+      case "add_documents_source":
+        return await toolAddSource(ctx, { kind: "documents", ...args });
       case "discover_database_tables":
         return await toolDiscoverDatabaseTables(ctx);
-      case "add_rest_source":
-        return await toolAddRestSource(ctx, args);
-      case "add_documents_source":
-        return await toolAddDocumentsSource(ctx, args);
       case "check_project_health":
         return await toolCheckProjectHealth(ctx);
       case "publish_project":
@@ -192,6 +188,16 @@ async function toolCreateProject(
   ctx: ToolContext,
   args: Record<string, unknown>,
 ): Promise<ToolHandlerResult> {
+  // Goldilocks-altitude rule from prose moved into code (Anthropic's
+  // "Effective context engineering" + Karpathy's "don't make the model
+  // follow rules in English when the substrate can refuse"). Spawning
+  // duplicate projects was our worst recurring failure mode.
+  if (ctx.currentProjectId) {
+    return {
+      message: `An active project already exists (id=${ctx.currentProjectId}). Modify it via add_source instead of creating a new one.`,
+      isError: true,
+    };
+  }
   const name = String(args.name ?? "Untitled MCP");
   const description = String(args.description ?? "");
   const agency = String(args.agency ?? "");
@@ -207,6 +213,37 @@ async function toolCreateProject(
     newCurrentProjectId: project.id,
     projectUpdated: true,
   };
+}
+
+/**
+ * Single source-attach verb. Dispatches on `kind` and absorbs the three
+ * former add_*_source handlers + auto-discovery for the database kind.
+ *
+ * This is the v0 / Codex pattern (one well-described tool beats three
+ * near-duplicates) — the model used to mix up which add_* to call when
+ * the user's message was ambiguous; now it just passes `kind`.
+ */
+async function toolAddSource(
+  ctx: ToolContext,
+  args: Record<string, unknown>,
+): Promise<ToolHandlerResult> {
+  if (!ctx.currentProjectId) {
+    return { message: "Call create_project first.", isError: true };
+  }
+  const kind = String(args.kind ?? "");
+  switch (kind) {
+    case "database":
+      return toolAddDatabaseSource(ctx, args);
+    case "rest":
+      return toolAddRestSource(ctx, args);
+    case "documents":
+      return toolAddDocumentsSource(ctx, args);
+    default:
+      return {
+        message: `Unknown source kind '${kind}'. Use 'database', 'rest', or 'documents'.`,
+        isError: true,
+      };
+  }
 }
 
 async function toolAddDatabaseSource(
@@ -248,9 +285,29 @@ async function toolAddDatabaseSource(
     );
   }
 
+  // Auto-discover tables. Database attach + discover were always called
+  // back-to-back; Anthropic's "consolidate frequently chained tools"
+  // pattern says merge them. Failure here is non-fatal — attach still
+  // succeeds; the model can call discover_database_tables manually later
+  // if e.g. the password is wrong and they want to retry.
+  let discoveryNote = "";
+  try {
+    const discoveryResult = await toolDiscoverDatabaseTables(ctx);
+    if (!discoveryResult.isError) {
+      const tableCount =
+        (discoveryResult.data?.tables as { name: string }[] | undefined)
+          ?.length ?? 0;
+      discoveryNote = ` Discovered ${tableCount} table(s) and registered each as an MCP tool.`;
+    } else {
+      discoveryNote = ` (Couldn't auto-discover tables: ${discoveryResult.message})`;
+    }
+  } catch (e) {
+    discoveryNote = ` (Auto-discovery skipped: ${e instanceof Error ? e.message : "unknown error"})`;
+  }
+
   return {
-    message: `Attached database '${data.name}' at ${data.host}:${data.port}/${data.database} as user '${data.username}'. Password saved as ${data.passwordEnvVar}. Run discover_database_tables next to expose tables as MCP tools.`,
-    data: { nodeId: node.id, host: data.host, database: data.database },
+    message: `Attached database '${data.name}' at ${data.host}:${data.port}/${data.database} as user '${data.username}'.${discoveryNote}`,
+    data: { host: data.host, database: data.database },
     projectUpdated: true,
   };
 }
@@ -435,10 +492,14 @@ async function toolAddDocumentsSource(
 }
 
 /**
- * Project health report. Mirrors the "feature list as harness primitive"
- * idea: enumerate the conditions each source needs to satisfy, then check
- * each one. The agent reads the report and decides what to fix before
- * publishing — instead of publishing an empty MCP and calling it done.
+ * Project health report — the single source of truth for "is this project
+ * publishable, and if not, why?". Both check_project_health (the model-
+ * callable tool) and publish_project (the server-enforced gate) call this.
+ *
+ * Karpathy critique: we previously had three implementations of this logic
+ * (summarizeProject in harness.ts, this function, and publish's preflight).
+ * Down to two: summarizeProject (the model-facing string for the system
+ * prompt) and this one (the structured truth).
  */
 interface SourceIssue {
   source: string;
@@ -446,15 +507,18 @@ interface SourceIssue {
   problem: string;
 }
 
-async function toolCheckProjectHealth(
-  ctx: ToolContext,
-): Promise<ToolHandlerResult> {
-  if (!ctx.currentProjectId) {
-    return { message: "No project to inspect.", isError: true };
-  }
-  const project = await getProject({ userId: ctx.userId }, ctx.currentProjectId);
-  if (!project) return { message: "Project not found.", isError: true };
+interface ProjectHealth {
+  sources: number;
+  wiredSources: number;
+  toolCount: number;
+  readyToPublish: boolean;
+  issues: SourceIssue[];
+  summary: string;
+}
 
+async function computeProjectHealth(
+  project: McpProject,
+): Promise<ProjectHealth> {
   const output = project.nodes.find((n) => n.data.kind === "output.mcp");
   const sources = project.nodes.filter((n) => n.data.kind !== "output.mcp");
   const wired = new Set(
@@ -483,7 +547,6 @@ async function toolCheckProjectHealth(
           problem: "Documents source has no enabled collections.",
         });
       } else {
-        // Count vectors actually indexed for any of this source's collections.
         const indexed = await listIndexedFiles(project.id).catch(() => []);
         if (indexed.length === 0) {
           issues.push({
@@ -535,19 +598,43 @@ async function toolCheckProjectHealth(
 
   const toolCount = runtimeListTools(project).length;
   const readyToPublish = sources.length > 0 && issues.length === 0 && toolCount > 0;
+  const summary = readyToPublish
+    ? `Healthy. ${sources.length} source(s) wired, ${toolCount} tool(s) exposed.`
+    : sources.length === 0
+      ? "Project has no sources yet — add a database, REST API, or documents source first."
+      : `${issues.length} blocker(s) need fixing before publish will succeed: ${issues
+          .map((i) => `${i.source} (${i.problem})`)
+          .join("; ")}`;
 
   return {
-    message: readyToPublish
-      ? `Healthy. ${sources.length} source(s) wired, ${toolCount} tool(s) exposed. Safe to publish.`
-      : sources.length === 0
-        ? "Project has no sources yet — add a database, REST API, or documents source first."
-        : `Found ${issues.length} issue(s) blocking a useful publish. Fix these, then call check_project_health again.`,
+    sources: sources.length,
+    wiredSources: wired.size,
+    toolCount,
+    readyToPublish,
+    issues,
+    summary,
+  };
+}
+
+async function toolCheckProjectHealth(
+  ctx: ToolContext,
+): Promise<ToolHandlerResult> {
+  if (!ctx.currentProjectId) {
+    return { message: "No project to inspect.", isError: true };
+  }
+  const project = await getProject({ userId: ctx.userId }, ctx.currentProjectId);
+  if (!project) return { message: "Project not found.", isError: true };
+  const health = await computeProjectHealth(project);
+  return {
+    message: health.readyToPublish
+      ? `${health.summary} Safe to publish.`
+      : health.summary,
     data: {
-      sources: sources.length,
-      wiredSources: wired.size,
-      toolCount,
-      readyToPublish,
-      issues,
+      sources: health.sources,
+      wiredSources: health.wiredSources,
+      toolCount: health.toolCount,
+      readyToPublish: health.readyToPublish,
+      issues: health.issues,
     },
   };
 }
@@ -559,48 +646,28 @@ async function toolPublishProject(ctx: ToolContext): Promise<ToolHandlerResult> 
   const project = await getProject({ userId: ctx.userId }, ctx.currentProjectId);
   if (!project) return { message: "Project not found.", isError: true };
 
-  const draftNodes = project.nodes.filter(
-    (n) => n.data.kind !== "output.mcp" && n.data.status !== "ready",
-  );
-  if (draftNodes.length > 0) {
+  // Server-enforce the health check — regardless of whether the model
+  // remembered to call check_project_health first. Codex's pattern: the
+  // verification gate is the harness's job, not the model's.
+  const health = await computeProjectHealth(project);
+  if (!health.readyToPublish) {
     return {
-      message: `Can't publish — these sources are still in draft: ${draftNodes
-        .map((n) => n.data.name)
-        .join(", ")}.`,
-      isError: true,
-    };
-  }
-
-  // Verify the snapshot will actually produce a useful MCP BEFORE saving the
-  // public copy. Without this, publish silently succeeds on broken projects
-  // — exactly the "declared victory too early" failure mode from the harness
-  // engineering guide.
-  const sources = project.nodes.filter((n) => n.data.kind !== "output.mcp");
-  if (sources.length === 0) {
-    return {
-      message:
-        "Can't publish — the project has no sources, so the MCP would expose zero tools. Add a database, REST API, or documents source first.",
-      isError: true,
-    };
-  }
-  const previewTools = runtimeListTools(project);
-  if (previewTools.length === 0) {
-    return {
-      message:
-        "Can't publish — the project has sources but they expose no tools. Likely causes: documents source with no indexed files, database source with no tables enabled, or REST source with no endpoints. Call check_project_health to diagnose.",
+      message: `Can't publish — ${health.summary}`,
+      data: { issues: health.issues, toolCount: health.toolCount },
       isError: true,
     };
   }
 
   await savePublishedProject(project, ctx.userId);
   const slug = outputSlug(project);
+  const tools = runtimeListTools(project);
   return {
-    message: `Published. ${previewTools.length} tool(s) live at /api/mcp/${slug} — AI clients can connect now.`,
+    message: `Published. ${tools.length} tool(s) live at /api/mcp/${slug} — AI clients can connect now.`,
     data: {
       slug,
       url: `/api/mcp/${slug}`,
-      toolCount: previewTools.length,
-      tools: previewTools.map((t) => t.name),
+      toolCount: tools.length,
+      tools: tools.map((t) => t.name),
     },
     projectUpdated: true,
   };
