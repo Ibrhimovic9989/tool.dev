@@ -19,6 +19,8 @@ import {
   updateProjectGraph,
 } from "@/lib/server/projects-service";
 import { savePublishedProject } from "@/lib/server/project-store";
+import { listTools as runtimeListTools } from "@/lib/server/mcp-runtime";
+import { listIndexedFiles } from "@/lib/docs/store";
 import type {
   DatabaseSourceData,
   DbTable,
@@ -137,9 +139,15 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
+    name: "check_project_health",
+    description:
+      "Inspect the current project and report which sources are connected, how many MCP tools it currently exposes, and any issues that would cause publish to produce an empty server. ALWAYS call this before publish_project so you can fix problems instead of shipping a broken MCP.",
+    parameters: { type: "object", properties: {} },
+  },
+  {
     name: "publish_project",
     description:
-      "Persist the current project to the live MCP runtime. Returns the public URL that AI clients connect to. Refuses if any source is still in draft.",
+      "Persist the current project to the live MCP runtime. Verifies the published snapshot exposes at least one tool before declaring success — refuses with an actionable error if it would publish an empty server.",
     parameters: { type: "object", properties: {} },
   },
 ];
@@ -163,6 +171,8 @@ export async function runTool(
         return await toolAddRestSource(ctx, args);
       case "add_documents_source":
         return await toolAddDocumentsSource(ctx, args);
+      case "check_project_health":
+        return await toolCheckProjectHealth(ctx);
       case "publish_project":
         return await toolPublishProject(ctx);
       default:
@@ -424,12 +434,131 @@ async function toolAddDocumentsSource(
   };
 }
 
+/**
+ * Project health report. Mirrors the "feature list as harness primitive"
+ * idea: enumerate the conditions each source needs to satisfy, then check
+ * each one. The agent reads the report and decides what to fix before
+ * publishing — instead of publishing an empty MCP and calling it done.
+ */
+interface SourceIssue {
+  source: string;
+  kind: string;
+  problem: string;
+}
+
+async function toolCheckProjectHealth(
+  ctx: ToolContext,
+): Promise<ToolHandlerResult> {
+  if (!ctx.currentProjectId) {
+    return { message: "No project to inspect.", isError: true };
+  }
+  const project = await getProject({ userId: ctx.userId }, ctx.currentProjectId);
+  if (!project) return { message: "Project not found.", isError: true };
+
+  const output = project.nodes.find((n) => n.data.kind === "output.mcp");
+  const sources = project.nodes.filter((n) => n.data.kind !== "output.mcp");
+  const wired = new Set(
+    output
+      ? project.edges
+          .filter((e) => e.target === output.id)
+          .map((e) => e.source)
+      : [],
+  );
+
+  const issues: SourceIssue[] = [];
+  for (const n of sources) {
+    if (!wired.has(n.id)) {
+      issues.push({
+        source: n.data.name,
+        kind: n.data.kind,
+        problem: "Not connected to the MCP output node.",
+      });
+    }
+    if (n.data.kind === "source.documents") {
+      const enabled = n.data.collections.filter((c) => c.enabled);
+      if (enabled.length === 0) {
+        issues.push({
+          source: n.data.name,
+          kind: n.data.kind,
+          problem: "Documents source has no enabled collections.",
+        });
+      } else {
+        // Count vectors actually indexed for any of this source's collections.
+        const indexed = await listIndexedFiles(project.id).catch(() => []);
+        if (indexed.length === 0) {
+          issues.push({
+            source: n.data.name,
+            kind: n.data.kind,
+            problem:
+              "No files indexed yet — user needs to drop files in chat or the right-hand panel.",
+          });
+        }
+      }
+    } else if (n.data.kind === "source.database") {
+      if (!n.data.host || !n.data.database) {
+        issues.push({
+          source: n.data.name,
+          kind: n.data.kind,
+          problem: "Database connection details are incomplete.",
+        });
+      } else if (n.data.tables.filter((t) => t.enabled).length === 0) {
+        issues.push({
+          source: n.data.name,
+          kind: n.data.kind,
+          problem:
+            "No tables enabled. Run discover_database_tables to enumerate them.",
+        });
+      } else if (!project.secrets[n.data.passwordEnvVar]) {
+        issues.push({
+          source: n.data.name,
+          kind: n.data.kind,
+          problem: `Missing password secret (${n.data.passwordEnvVar}).`,
+        });
+      }
+    } else if (n.data.kind === "source.rest") {
+      if (!n.data.baseUrl) {
+        issues.push({
+          source: n.data.name,
+          kind: n.data.kind,
+          problem: "REST source has no base URL.",
+        });
+      } else if (n.data.endpoints.filter((e) => e.enabled).length === 0) {
+        issues.push({
+          source: n.data.name,
+          kind: n.data.kind,
+          problem:
+            "No endpoints enabled. Configure at least one in the builder UI or via an OpenAPI import.",
+        });
+      }
+    }
+  }
+
+  const toolCount = runtimeListTools(project).length;
+  const readyToPublish = sources.length > 0 && issues.length === 0 && toolCount > 0;
+
+  return {
+    message: readyToPublish
+      ? `Healthy. ${sources.length} source(s) wired, ${toolCount} tool(s) exposed. Safe to publish.`
+      : sources.length === 0
+        ? "Project has no sources yet — add a database, REST API, or documents source first."
+        : `Found ${issues.length} issue(s) blocking a useful publish. Fix these, then call check_project_health again.`,
+    data: {
+      sources: sources.length,
+      wiredSources: wired.size,
+      toolCount,
+      readyToPublish,
+      issues,
+    },
+  };
+}
+
 async function toolPublishProject(ctx: ToolContext): Promise<ToolHandlerResult> {
   if (!ctx.currentProjectId) {
     return { message: "No project to publish.", isError: true };
   }
   const project = await getProject({ userId: ctx.userId }, ctx.currentProjectId);
   if (!project) return { message: "Project not found.", isError: true };
+
   const draftNodes = project.nodes.filter(
     (n) => n.data.kind !== "output.mcp" && n.data.status !== "ready",
   );
@@ -441,11 +570,38 @@ async function toolPublishProject(ctx: ToolContext): Promise<ToolHandlerResult> 
       isError: true,
     };
   }
+
+  // Verify the snapshot will actually produce a useful MCP BEFORE saving the
+  // public copy. Without this, publish silently succeeds on broken projects
+  // — exactly the "declared victory too early" failure mode from the harness
+  // engineering guide.
+  const sources = project.nodes.filter((n) => n.data.kind !== "output.mcp");
+  if (sources.length === 0) {
+    return {
+      message:
+        "Can't publish — the project has no sources, so the MCP would expose zero tools. Add a database, REST API, or documents source first.",
+      isError: true,
+    };
+  }
+  const previewTools = runtimeListTools(project);
+  if (previewTools.length === 0) {
+    return {
+      message:
+        "Can't publish — the project has sources but they expose no tools. Likely causes: documents source with no indexed files, database source with no tables enabled, or REST source with no endpoints. Call check_project_health to diagnose.",
+      isError: true,
+    };
+  }
+
   await savePublishedProject(project, ctx.userId);
   const slug = outputSlug(project);
   return {
-    message: `Published. The MCP is live and AI clients can connect to it now.`,
-    data: { slug, url: `/api/mcp/${slug}` },
+    message: `Published. ${previewTools.length} tool(s) live at /api/mcp/${slug} — AI clients can connect now.`,
+    data: {
+      slug,
+      url: `/api/mcp/${slug}`,
+      toolCount: previewTools.length,
+      tools: previewTools.map((t) => t.name),
+    },
     projectUpdated: true,
   };
 }

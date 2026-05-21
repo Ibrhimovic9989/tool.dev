@@ -55,10 +55,39 @@ export async function listProjects(scope: OwnerScope): Promise<McpProject[]> {
   return rows.map(hydrate);
 }
 
+/**
+ * Safety net: ensure every non-output node has an edge into the MCP output
+ * node. The MCP runtime's connectedSources() requires explicit edges, so a
+ * missing wire silently turns a published MCP into "0 tools". This function
+ * fixes that on every save — both the agent path (which already does it via
+ * addNodeToProject) and the chat-panel path (which mutates Zustand directly
+ * and historically forgot).
+ */
+export function autoWireToOutput(project: McpProject): void {
+  const output = project.nodes.find((n) => n.data.kind === "output.mcp");
+  if (!output) return;
+  const wired = new Set(
+    project.edges
+      .filter((e) => e.target === output.id)
+      .map((e) => e.source),
+  );
+  for (const n of project.nodes) {
+    if (n.data.kind === "output.mcp") continue;
+    if (wired.has(n.id)) continue;
+    project.edges.push({
+      id: `e_${n.id}_${output.id}`,
+      source: n.id,
+      target: output.id,
+    });
+  }
+}
+
 export async function saveProject(
   scope: OwnerScope,
   project: McpProject,
 ): Promise<void> {
+  autoWireToOutput(project);
+
   const db = getDb();
   const slug =
     project.nodes.find((n) => n.data.kind === "output.mcp")?.data?.kind ===

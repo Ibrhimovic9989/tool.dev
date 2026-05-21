@@ -33,6 +33,11 @@ Project context rules — read carefully:
 - Only call create_project when there is NO current project AND the user is starting fresh.
 - If the user has uploaded files in chat (look for an existing source.documents node with a 'chat_uploads' collection), DO NOT add another documents source — the files are already indexed. Just confirm and continue.
 
+Publishing rules (this is where agents most often "declare victory too early" — do not):
+- BEFORE calling publish_project, ALWAYS call check_project_health first. The report tells you exactly which sources are wired, how many tools the MCP currently exposes, and what issues block a useful publish.
+- If check_project_health returns issues, fix them (or tell the user what they need to provide) BEFORE attempting publish.
+- A publish that exposes zero tools is a FAILURE, not a success. The publish_project tool will refuse in that case; treat the refusal as the truth and act on it instead of retrying.
+
 General rules:
 - Be conservative: prefer a tight, working setup (one DB or one API plus discovery) over a sprawling one.
 - After adding a database, run discover_database_tables in the same turn.
