@@ -10,10 +10,12 @@
 
 import "server-only";
 import { eq, asc } from "drizzle-orm";
+import { createHash } from "node:crypto";
 import { nanoid } from "nanoid";
 import { getDb, schema } from "@/db/client";
 import { TOOLS, runTool, type ToolContext } from "./tools";
 import { getProject } from "@/lib/server/projects-service";
+import { listTools as runtimeListTools } from "@/lib/server/mcp-runtime";
 import type { McpProject } from "@/lib/types";
 
 const ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT;
@@ -48,41 +50,122 @@ General rules:
 
 Tool calls are server-executed and the results are visible to you. The user sees a separate canvas reflecting the current project. Keep your final text replies short — the canvas already shows what changed.`;
 
+/**
+ * Inspired by code-review-graph's pattern of attaching risk/readiness scores
+ * to each node in a structural map instead of dumping raw state and forcing
+ * the LLM to re-derive readiness on every turn.
+ *
+ * For each source we list:
+ *   • status / wired (structural facts)
+ *   • a compact diagnosis line ("ready" or the specific blocker)
+ *   • the tools it would contribute (so the model can size up the surface)
+ *
+ * We also surface a project-level health line + a short stable hash. The
+ * hash gives the model a cheap way to recognize "this is the same project
+ * I worked on" across turns, which cuts down on drift.
+ */
 function summarizeProject(project: McpProject): string {
+  const output = project.nodes.find((n) => n.data.kind === "output.mcp");
+  const sources = project.nodes.filter((n) => n.data.kind !== "output.mcp");
+  const wired = new Set(
+    output
+      ? project.edges.filter((e) => e.target === output.id).map((e) => e.source)
+      : [],
+  );
+
+  // Compute the runtime tool list once so per-source numbers add up.
+  const toolDefs = runtimeListTools(project);
+  const toolNames = toolDefs.map((t) => t.name);
+
+  const hash = createHash("sha256")
+    .update(
+      JSON.stringify({
+        id: project.id,
+        nodes: project.nodes.map((n) => ({
+          id: n.id,
+          kind: n.data.kind,
+          name: n.data.name,
+        })),
+        edgeCount: project.edges.length,
+      }),
+    )
+    .digest("hex")
+    .slice(0, 8);
+
   const lines: string[] = [];
-  lines.push(`Current project: "${project.name}" (id=${project.id})`);
+  lines.push(`Current project: "${project.name}" (id=${project.id}, snapshot=${hash})`);
   if (project.agency) lines.push(`Agency: ${project.agency}`);
   if (project.description) lines.push(`Purpose: ${project.description}`);
-  const sources = project.nodes.filter((n) => n.data.kind !== "output.mcp");
+
   if (sources.length === 0) {
     lines.push("Sources: (none yet — add one before publishing)");
   } else {
     lines.push(`Sources (${sources.length}):`);
     for (const n of sources) {
       const d = n.data;
+      const isWired = wired.has(n.id);
+      let head = "";
+      let diag = "";
       if (d.kind === "source.documents") {
-        const cols = d.collections
-          .map((c) => `${c.resourceName}(${c.files.length} files)`)
+        const cols = d.collections.filter((c) => c.enabled);
+        const totalFiles = cols.reduce((sum, c) => sum + c.files.length, 0);
+        const colSummary = cols
+          .map((c) => `${c.resourceName}(${c.files.length}f)`)
           .join(", ");
-        lines.push(`  - documents '${d.name}': ${cols || "no collections"} [status=${d.status}]`);
+        head = `documents '${d.name}': ${colSummary || "no enabled collections"}`;
+        if (!isWired) diag = "BLOCKER: not connected to output";
+        else if (cols.length === 0) diag = "BLOCKER: no enabled collections";
+        else if (totalFiles === 0)
+          diag = "BLOCKER: no files indexed — user must drop files in chat";
+        else diag = "ready";
       } else if (d.kind === "source.database") {
-        lines.push(
-          `  - database '${d.name}': ${d.host}/${d.database}, ${d.tables.filter((t) => t.enabled).length} tables [status=${d.status}]`,
-        );
+        const enabledTables = d.tables.filter((t) => t.enabled).length;
+        head = `database '${d.name}': ${d.host || "no host"}/${d.database || "no db"}, ${enabledTables} tables enabled`;
+        if (!isWired) diag = "BLOCKER: not connected to output";
+        else if (!d.host || !d.database)
+          diag = "BLOCKER: connection details incomplete";
+        else if (!project.secrets[d.passwordEnvVar])
+          diag = `BLOCKER: missing secret ${d.passwordEnvVar}`;
+        else if (enabledTables === 0)
+          diag = "BLOCKER: 0 tables enabled — call discover_database_tables";
+        else diag = "ready";
       } else if (d.kind === "source.rest") {
-        lines.push(
-          `  - rest '${d.name}': ${d.baseUrl}, ${d.endpoints.filter((e) => e.enabled).length} endpoints [status=${d.status}]`,
-        );
+        const enabledEps = d.endpoints.filter((e) => e.enabled).length;
+        head = `rest '${d.name}': ${d.baseUrl || "no baseUrl"}, ${enabledEps} endpoints`;
+        if (!isWired) diag = "BLOCKER: not connected to output";
+        else if (!d.baseUrl) diag = "BLOCKER: no base URL";
+        else if (enabledEps === 0) diag = "BLOCKER: no endpoints enabled";
+        else diag = "ready";
       } else if (d.kind === "source.webpage") {
-        lines.push(
-          `  - webpage '${d.name}': ${d.targets.filter((t) => t.enabled).length} targets [status=${d.status}]`,
-        );
+        const enabledTargets = d.targets.filter((t) => t.enabled).length;
+        head = `webpage '${d.name}': ${enabledTargets} targets`;
+        if (!isWired) diag = "BLOCKER: not connected to output";
+        else if (enabledTargets === 0) diag = "BLOCKER: no enabled targets";
+        else diag = "ready";
       }
+      lines.push(`  - ${head} [status=${d.status}, wired=${isWired ? "yes" : "NO"}] — ${diag}`);
     }
   }
-  const output = project.nodes.find((n) => n.data.kind === "output.mcp");
+
   if (output && output.data.kind === "output.mcp") {
-    lines.push(`Output slug: ${output.data.slug} (status=${output.data.status})`);
+    lines.push(
+      `Output: slug=${output.data.slug} (status=${output.data.status}). Currently exposes ${toolDefs.length} tool(s)${
+        toolNames.length ? ": " + toolNames.join(", ") : ""
+      }.`,
+    );
+  }
+
+  // Project-level health verdict. This is the same shape check_project_health
+  // returns, pre-computed so the model can decide without calling the tool.
+  const blockers = sources.length === 0 ? 1 : 0; // no sources ≈ 1 blocker
+  const lineBlockers = lines.filter((l) => l.includes("BLOCKER")).length;
+  const totalBlockers = blockers + lineBlockers;
+  if (totalBlockers === 0 && toolDefs.length > 0) {
+    lines.push(`Health: ready to publish ✓ (${toolDefs.length} tools).`);
+  } else {
+    lines.push(
+      `Health: NOT publishable. ${totalBlockers} blocker(s) above need fixing before publish_project will succeed.`,
+    );
   }
   return lines.join("\n");
 }
