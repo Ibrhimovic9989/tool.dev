@@ -83,11 +83,14 @@ const HAPPY: Fixture[] = [
     userMessage:
       "Connect postgres://readonly:hunter2@db.dept.gov:5432/permits and publish it.",
     expect: {
-      mustCall: ["add_source", "publish_project"],
+      // The test host is unreachable — discovery fails so the project ends
+      // up with no enabled tables and no secret. The health-aware tool
+      // filter correctly hides publish_project, so the agent CAN'T call
+      // publish. That's actually correct behavior — publishing a broken
+      // DB-backed MCP would mislead the user. So we just assert that the
+      // attach happened; the publish-refusal is left implicit.
+      mustCall: ["add_source"],
       sourceKinds: ["source.database"],
-      // The test host is unreachable, so discovery fails → publish_project
-      // gets server-refused. We're still testing that the agent tried to
-      // publish — the refusal itself is correct behavior.
       maxTurns: 4,
     },
   },
@@ -140,18 +143,72 @@ const CONTINUITY: Fixture[] = [
       maxTurns: 3,
     },
   },
+  {
+    id: "publish_with_known_blocker",
+    // Seeded with a Documents source whose chat_uploads collection has
+    // ZERO indexed files. The state-injection shows a BLOCKER and the
+    // catalog filter should hide publish_project (no files = no tools).
+    userMessage: "Publish it.",
+    expect: {
+      forbidPublish: true,
+      mustNotCall: ["publish_project"],
+      maxTurns: 3,
+    },
+  },
+  {
+    id: "drop_files_in_chat",
+    // Seeded with a Documents source whose chat_uploads collection has
+    // 2 fake-indexed files (3 chunks each). publish should succeed.
+    userMessage:
+      "I just dragged 2 PDFs into the chat. Make them searchable and publish.",
+    expect: {
+      mustNotCall: ["add_source"], // would duplicate the existing source
+      mustCall: ["publish_project"],
+      maxTurns: 3,
+    },
+  },
 ];
 
-// ─── edge cases worth catching once ─────────────────────────────────────────
-// These need proper project seeding (existing documents node, chat_uploads
-// collection, indexed vectors). Skipped from the synthetic run until the
-// seeding helpers exist; the test harness still ships the fixture so it's
-// findable.
-const EDGE: Fixture[] = [];
+// ─── pulled from prod logs (turn-1 user messages we've actually seen) ───────
+const PROD: Fixture[] = [
+  {
+    id: "prod_documents_single_word",
+    userMessage: "documents",
+    expect: {
+      // Single-word ask for documents: bias-to-action should make the
+      // agent attach a Documents source without further prompting.
+      mustCall: ["add_source"],
+      sourceKinds: ["source.documents"],
+      maxTurns: 3,
+    },
+  },
+  {
+    id: "prod_add_some_tools",
+    userMessage: "add some tools",
+    expect: {
+      // Genuinely vague — must ask what tools (database / API / docs)
+      // before doing anything. Adding a source on guesswork is wrong.
+      mustNotCall: ["add_source", "publish_project"],
+      expectClarifyingQuestion: true,
+      maxTurns: 2,
+    },
+  },
+  {
+    id: "prod_create_the_server",
+    userMessage: "create the server",
+    expect: {
+      // No active project, so create_project is exposed. The agent
+      // should create the project but NOT immediately publish (empty).
+      mustCall: ["create_project"],
+      mustNotCall: ["publish_project"],
+      maxTurns: 3,
+    },
+  },
+];
 
 export const FIXTURES: Fixture[] = [
   ...HAPPY,
   ...REFUSALS,
   ...CONTINUITY,
-  ...EDGE,
+  ...PROD,
 ];

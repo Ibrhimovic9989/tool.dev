@@ -13,7 +13,7 @@ import { eq, asc } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import { nanoid } from "nanoid";
 import { getDb, schema } from "@/db/client";
-import { TOOLS, runTool, type ToolContext } from "./tools";
+import { TOOLS, runTool, computeProjectHealth, type ToolContext } from "./tools";
 import { getProject } from "@/lib/server/projects-service";
 import { listTools as runtimeListTools } from "@/lib/server/mcp-runtime";
 import type { McpProject } from "@/lib/types";
@@ -292,7 +292,7 @@ export async function runAgentTurn(
           ctx.currentProjectId,
         ).catch(() => null)
       : null;
-    const availableTools = filterTools(currentProject);
+    const availableTools = await filterTools(currentProject);
     const reply = await callModel(wire, availableTools);
     // Persist assistant turn (may be tool-call-only with empty content).
     await db.insert(schema.messages).values({
@@ -397,20 +397,25 @@ interface ModelReply {
  * the tool-exposure layer: the model literally can't call a tool it doesn't
  * see, which beats trusting it to obey a prose rule.
  *
- *   - publish_project — only when there's a source to publish
+ *   - publish_project — only when the project is ACTUALLY publishable
+ *     (computeProjectHealth.readyToPublish). A source with no indexed
+ *     files / no enabled tables / missing secret still hides publish.
  *   - create_project — only when there's no active project
  *   - discover_database_tables — only when a database source already exists
  */
-function filterTools(project: McpProject | null): typeof TOOLS {
+async function filterTools(
+  project: McpProject | null,
+): Promise<typeof TOOLS> {
   const hasProject = !!project;
   const sources = project
     ? project.nodes.filter((n) => n.data.kind !== "output.mcp")
     : [];
-  const hasSource = sources.length > 0;
   const hasDatabase = sources.some((n) => n.data.kind === "source.database");
+  const health = project ? await computeProjectHealth(project) : null;
+  const canPublish = !!health?.readyToPublish;
   return TOOLS.filter((t) => {
     if (t.name === "create_project" && hasProject) return false;
-    if (t.name === "publish_project" && !hasSource) return false;
+    if (t.name === "publish_project" && !canPublish) return false;
     if (t.name === "discover_database_tables" && !hasDatabase) return false;
     return true;
   });

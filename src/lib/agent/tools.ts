@@ -516,7 +516,7 @@ interface ProjectHealth {
   summary: string;
 }
 
-async function computeProjectHealth(
+export async function computeProjectHealth(
   project: McpProject,
 ): Promise<ProjectHealth> {
   const output = project.nodes.find((n) => n.data.kind === "output.mcp");
