@@ -20,7 +20,7 @@ export function AgentTranscript() {
         }}
       />
 
-      <figure className="relative z-10 overflow-hidden rounded-2xl border border-[color:var(--color-ink-border)] bg-[color:var(--color-ink-1)]/85 backdrop-blur-sm">
+      <figure className="relative z-10 overflow-hidden rounded-2xl bg-[color:var(--color-ink-1)]/85 backdrop-blur-sm shadow-[0_30px_60px_-30px_oklch(0.05_0.02_250/0.8),inset_0_1px_0_oklch(1_0_0/0.05)]">
         {/* macOS-style window chrome (Replit's move). Three dots + label. */}
         <figcaption className="flex items-center gap-3 border-b border-[color:var(--color-ink-border)] px-4 py-2.5">
           <div className="flex items-center gap-1.5">

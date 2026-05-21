@@ -25,7 +25,7 @@ export function DescribeHero() {
 
   return (
     <div className="w-full">
-      <div className="flex items-center gap-2 rounded-2xl border border-[color:var(--color-ink-border)] bg-[color:var(--color-ink-1)] p-1.5 shadow-[0_20px_60px_-30px_oklch(0.30_0.20_195_/_0.45)]">
+      <div className="flex items-center gap-2 rounded-2xl bg-[color:var(--color-ink-1)] p-1.5 shadow-[0_20px_60px_-30px_oklch(0.30_0.20_195_/_0.45),inset_0_1px_0_oklch(1_0_0/0.04)]">
         <span className="pl-3 pr-1 font-mono text-[color:var(--color-ink-text-3)] select-none">
           $
         </span>

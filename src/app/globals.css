@@ -37,8 +37,11 @@
   --color-ink-1: oklch(0.13 0.020 250);   /* card/panel                     */
   --color-ink-2: oklch(0.17 0.022 250);   /* lifted card / inset            */
   --color-ink-3: oklch(0.22 0.022 250);   /* hover / focus surface          */
-  --color-ink-border: oklch(0.28 0.020 250 / 0.55);
-  --color-ink-border-strong: oklch(0.36 0.020 250 / 0.85);
+  /* Borders sit just barely above the panel bg so cards have an edge but
+   * not an outline. (Earlier value 0.28/0.55 read as a bright line on
+   * the dark landing bg — felt "white".) */
+  --color-ink-border: oklch(0.19 0.018 250 / 0.45);
+  --color-ink-border-strong: oklch(0.30 0.020 250 / 0.7);
 
   /* Text on ink */
   --color-ink-text-1: oklch(0.97 0 0);
