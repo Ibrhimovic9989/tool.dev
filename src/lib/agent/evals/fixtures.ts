@@ -64,9 +64,14 @@ const HAPPY: Fixture[] = [
     id: "rest_api_no_auth",
     userMessage: "Build an MCP for https://jsonplaceholder.typicode.com — it's a public REST API.",
     expect: {
-      mustCall: ["add_source"],
+      // After add_rest_endpoint shipped, the agent now defines several
+      // endpoints in the same turn (jsonplaceholder has /posts, /users,
+      // /todos, /comments, /albums, /photos). Width here is generous —
+      // we care about correctness, not minimality.
+      mustCall: ["add_source", "add_rest_endpoint"],
       sourceKinds: ["source.rest"],
-      maxTurns: 4,
+      minTools: 1,
+      maxTurns: 12,
     },
   },
   {
@@ -83,6 +88,24 @@ const HAPPY: Fixture[] = [
       sourceKinds: ["source.rest"],
       minTools: 1,
       maxTurns: 5,
+    },
+  },
+  {
+    id: "rest_two_sources_one_turn",
+    // Real prod bug: user asked for two REST APIs in one message. The
+    // agent attached both, then add_rest_endpoint silently put both
+    // endpoints on the FIRST source — leaving the second in draft and
+    // blocking publish. Tests that multi-source add_rest_endpoint
+    // correctly targets each source with sourceName, and that both
+    // sources end up ready.
+    userMessage:
+      "Build an MCP exposing two endpoints:\n- GET https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41&hourly=temperature_2m\n- GET https://air-quality-api.open-meteo.com/v1/air-quality?latitude=52.52&longitude=13.41&hourly=pm10",
+    expect: {
+      // Two REST sources attached, two endpoints defined.
+      mustCall: ["add_source", "add_rest_endpoint"],
+      sourceKinds: ["source.rest"],
+      minTools: 2, // one tool per source → at minimum 2 tools total
+      maxTurns: 8,
     },
   },
   {

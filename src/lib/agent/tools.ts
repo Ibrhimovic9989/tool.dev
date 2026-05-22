@@ -132,7 +132,7 @@ export const TOOLS: ToolDef[] = [
   {
     name: "add_rest_endpoint",
     description:
-      "Define a REST endpoint as an MCP tool on the project's existing REST source. Required follow-up after add_source(kind='rest') — without at least one endpoint the REST source is in draft. If the user pasted a full URL like 'https://api.example.com/foo?lat=1&lng=2', parse it: extract the path under the base URL, and turn each query param into a tool parameter. Fixed/locked values (e.g. format=json) can be folded directly into the path: '/foo?format=json'.",
+      "Define a REST endpoint as an MCP tool on a REST source. Required follow-up after add_source(kind='rest'). If the user pasted a full URL like 'https://api.example.com/foo?lat=1&lng=2', parse it: path under base URL, query params become tool parameters; fold fixed values like 'format=json' directly into the path. When the project has MULTIPLE REST sources, you MUST pass sourceName to target the right one — otherwise the endpoint lands on the wrong source. If toolName already exists on a different REST source, this tool moves it to the target source.",
     parameters: {
       type: "object",
       properties: {
@@ -140,6 +140,11 @@ export const TOOLS: ToolDef[] = [
           type: "string",
           description:
             "snake_case identifier the AI client will call, e.g. 'get_hourly_temperature'",
+        },
+        sourceName: {
+          type: "string",
+          description:
+            "REST source name to attach this endpoint to. REQUIRED when more than one REST source exists. Case-insensitive substring match against the source's name.",
         },
         description: {
           type: "string",
@@ -464,13 +469,47 @@ async function toolAddRestEndpoint(
   );
   if (!project) return { message: "Project not found.", isError: true };
 
-  const restNode = project.nodes.find((n) => n.data.kind === "source.rest");
-  if (!restNode || restNode.data.kind !== "source.rest") {
+  // Find all REST sources. With more than one, sourceName is required so
+  // we don't pick wrong. Without sourceName + single source: use it.
+  const restNodes = project.nodes.filter(
+    (n): n is typeof n & { data: { kind: "source.rest" } } =>
+      n.data.kind === "source.rest",
+  );
+  if (restNodes.length === 0) {
     return {
       message:
         "No REST source on this project yet — call add_source({kind:'rest', baseUrl}) first.",
       isError: true,
     };
+  }
+  const sourceNameArg =
+    typeof args.sourceName === "string" ? args.sourceName.toLowerCase() : null;
+  let restNode: (typeof restNodes)[number];
+  if (restNodes.length > 1) {
+    if (!sourceNameArg) {
+      return {
+        message: `Multiple REST sources exist (${restNodes.map((n) => `"${n.data.name}"`).join(", ")}). Pass sourceName to disambiguate.`,
+        isError: true,
+      };
+    }
+    const matches = restNodes.filter((n) =>
+      n.data.name.toLowerCase().includes(sourceNameArg),
+    );
+    if (matches.length === 0) {
+      return {
+        message: `No REST source matches sourceName='${args.sourceName}'. Available: ${restNodes.map((n) => `"${n.data.name}"`).join(", ")}.`,
+        isError: true,
+      };
+    }
+    if (matches.length > 1) {
+      return {
+        message: `Ambiguous sourceName='${args.sourceName}' — matches ${matches.length} sources: ${matches.map((n) => `"${n.data.name}"`).join(", ")}. Be more specific.`,
+        isError: true,
+      };
+    }
+    restNode = matches[0];
+  } else {
+    restNode = restNodes[0];
   }
 
   const toolName = String(args.toolName ?? "")
@@ -538,13 +577,32 @@ async function toolAddRestEndpoint(
   };
 
   const restNodeId = restNode.id;
+  let movedFrom: string | null = null;
   await updateProjectGraph(
     { userId: ctx.userId },
     ctx.currentProjectId,
     (p) => {
+      // Auto-heal: if the same toolName lives on a DIFFERENT REST source
+      // (a leftover from an earlier wrong-target add), remove it there.
+      // This is exactly the bug that broke the Open-Meteo two-source flow.
+      for (const n of p.nodes) {
+        if (n.id === restNodeId) continue;
+        if (n.data.kind !== "source.rest") continue;
+        const before = n.data.endpoints.length;
+        n.data.endpoints = n.data.endpoints.filter(
+          (e) => e.toolName !== toolName,
+        );
+        if (n.data.endpoints.length < before) {
+          movedFrom = n.data.name;
+          n.data.status = n.data.endpoints.some((e) => e.enabled)
+            ? "ready"
+            : "draft";
+        }
+      }
+
       const node = p.nodes.find((n) => n.id === restNodeId);
       if (!node || node.data.kind !== "source.rest") return;
-      // Skip dupes — same toolName on the same source is a no-op.
+      // Same toolName on the SAME source is a no-op (idempotent retry).
       if (node.data.endpoints.some((e) => e.toolName === toolName)) return;
       node.data.endpoints = [...node.data.endpoints, newEndpoint];
       node.data.status = node.data.endpoints.some((e) => e.enabled)
@@ -553,9 +611,19 @@ async function toolAddRestEndpoint(
     },
   );
 
+  const moveNote = movedFrom
+    ? ` (auto-healed: moved this tool from the wrong source '${movedFrom}')`
+    : "";
   return {
-    message: `Defined endpoint '${toolName}' (${method} ${path}) on the REST source. The source is now ready; the MCP exposes this tool. ${parameters.length} parameter(s).`,
-    data: { toolName, method, path, parameters: parameters.map((p) => p.name) },
+    message: `Defined endpoint '${toolName}' (${method} ${path}) on REST source '${restNode.data.name}'${moveNote}. The source is now ready; the MCP exposes this tool. ${parameters.length} parameter(s).`,
+    data: {
+      toolName,
+      method,
+      path,
+      sourceName: restNode.data.name,
+      parameters: parameters.map((p) => p.name),
+      movedFrom,
+    },
     projectUpdated: true,
   };
 }
