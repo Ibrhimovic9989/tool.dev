@@ -80,13 +80,22 @@ export const TOOLS: ToolDef[] = [
       properties: {
         kind: {
           type: "string",
-          enum: ["database", "rest", "documents"],
+          enum: ["database", "rest", "documents", "webpage"],
           description:
-            "What kind of source to attach. 'database' for Postgres connection strings; 'rest' for HTTP APIs; 'documents' for PDF/Word/text files.",
+            "What kind of source to attach. 'database' for Postgres connection strings; 'rest' for HTTP APIs; 'documents' for PDF/Word/text files; 'webpage' for fetching a single public URL on demand.",
         },
         name: {
           type: "string",
           description: "Friendly name for this source (optional).",
+        },
+        url: {
+          type: "string",
+          description: "kind='webpage' only. The single public URL to fetch.",
+        },
+        resourceName: {
+          type: "string",
+          description:
+            "kind='documents' or 'webpage' only. snake_case identifier (e.g. 'hn_frontpage' for a webpage, 'policies' for a documents collection).",
         },
         // database
         connectionString: {
@@ -112,12 +121,6 @@ export const TOOLS: ToolDef[] = [
           type: "string",
           description:
             "kind='rest' only. Env var name where the token lives, e.g. 'API_TOKEN'.",
-        },
-        // documents
-        resourceName: {
-          type: "string",
-          description:
-            "kind='documents' only. snake_case collection id (e.g. 'policies'). Defaults to 'documents'.",
         },
       },
       required: ["kind"],
@@ -293,11 +296,69 @@ async function toolAddSource(
       return toolAddRestSource(ctx, args);
     case "documents":
       return toolAddDocumentsSource(ctx, args);
+    case "webpage":
+      return toolAddWebpageSource(ctx, args);
     default:
       return {
-        message: `Unknown source kind '${kind}'. Use 'database', 'rest', or 'documents'.`,
+        message: `Unknown source kind '${kind}'. Use 'database', 'rest', 'documents', or 'webpage'.`,
         isError: true,
       };
+  }
+}
+
+async function toolAddWebpageSource(
+  ctx: ToolContext,
+  args: Record<string, unknown>,
+): Promise<ToolHandlerResult> {
+  if (!ctx.currentProjectId) {
+    return { message: "Call create_project first.", isError: true };
+  }
+  const url = String(args.url ?? "").trim();
+  if (!/^https?:\/\//i.test(url)) {
+    return {
+      message: "kind='webpage' requires a url field (http or https).",
+      isError: true,
+    };
+  }
+  const resourceName = String(
+    args.resourceName ?? deriveResourceNameFromUrl(url),
+  )
+    .replace(/[^a-z0-9_]/gi, "_")
+    .toLowerCase()
+    .slice(0, 40) || "page";
+
+  const node = createNode("source.webpage", { x: 80, y: 80 });
+  // Cast to satisfy TS — the factory creates the right discriminated shape.
+  const data = node.data as { kind: "source.webpage"; name: string; status: "draft" | "ready" | "error"; targets: import("@/lib/types").WebTarget[]; refreshHours: number };
+  data.name = String(args.name ?? "Website");
+  data.refreshHours = 24;
+  data.targets = [
+    {
+      id: nanoid(8),
+      url,
+      resourceName,
+      description: `Content fetched from ${url}`,
+      followLinks: false,
+      maxDepth: 1,
+      enabled: true,
+    },
+  ];
+  data.status = "ready";
+  await addNodeToProject({ userId: ctx.userId }, ctx.currentProjectId, node);
+  return {
+    message: `Attached webpage '${data.name}' fetching ${url}. Exposed as MCP tool 'fetch_${resourceName}'.`,
+    data: { url, resourceName, toolName: `fetch_${resourceName}` },
+    projectUpdated: true,
+  };
+}
+
+function deriveResourceNameFromUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, "");
+    return host + (u.pathname && u.pathname !== "/" ? u.pathname : "");
+  } catch {
+    return "page";
   }
 }
 

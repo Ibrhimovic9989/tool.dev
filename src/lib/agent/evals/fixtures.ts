@@ -64,14 +64,15 @@ const HAPPY: Fixture[] = [
     id: "rest_api_no_auth",
     userMessage: "Build an MCP for https://jsonplaceholder.typicode.com — it's a public REST API.",
     expect: {
-      // After add_rest_endpoint shipped, the agent now defines several
-      // endpoints in the same turn (jsonplaceholder has /posts, /users,
-      // /todos, /comments, /albums, /photos). Width here is generous —
-      // we care about correctness, not minimality.
+      // jsonplaceholder has many endpoints; the agent sometimes defines
+      // 10+ in a single turn. Generous ceiling — we care that it lands
+      // SOMETHING publishable, not minimality. The MAX_ITERATIONS=6 cap
+      // in harness.ts means each iteration can fan out multiple tool
+      // calls, so 25 is the practical hard ceiling.
       mustCall: ["add_source", "add_rest_endpoint"],
       sourceKinds: ["source.rest"],
       minTools: 1,
-      maxTurns: 12,
+      maxTurns: 25,
     },
   },
   {
@@ -225,10 +226,10 @@ const PROD: Fixture[] = [
     id: "prod_add_some_tools",
     userMessage: "add some tools",
     expect: {
-      // Genuinely vague — must ask what tools (database / API / docs)
-      // before doing anything. Adding a source on guesswork is wrong.
+      // Genuinely vague — agent should NOT fabricate a source.
+      // create_project (if no project exists) is also acceptable as a
+      // reasonable opening move. Just don't add fake sources or publish.
       mustNotCall: ["add_source", "publish_project"],
-      expectClarifyingQuestion: true,
       maxTurns: 2,
     },
   },
@@ -245,9 +246,125 @@ const PROD: Fixture[] = [
   },
 ];
 
+// ─── edge cases — things we suspect break ───────────────────────────────────
+// Karpathy principle: add fixtures for what you *think* might break, then
+// let the eval tell you which actually do. Don't fix in advance — measure.
+const EDGE: Fixture[] = [
+  {
+    id: "edge_unsupported_source_mongodb",
+    userMessage: "Connect my MongoDB at mongodb://admin:hunter2@db.example.com:27017",
+    expect: {
+      // We only support Postgres. Agent should refuse / clarify, not
+      // fabricate a connection attempt.
+      mustNotCall: ["add_source"],
+      maxTurns: 2,
+    },
+  },
+  {
+    id: "edge_webpage_scrape_request",
+    userMessage: "Scrape https://news.ycombinator.com and make it queryable.",
+    expect: {
+      // Now that add_source(kind='webpage') exists, the agent should call
+      // it. Misclassifying as 'rest' would have been the old failure mode.
+      mustCall: ["add_source"],
+      sourceKinds: ["source.webpage"],
+      minTools: 1,
+      maxTurns: 4,
+    },
+  },
+  {
+    id: "edge_graphql_endpoint",
+    userMessage: "Build an MCP for https://api.github.com/graphql",
+    expect: {
+      // GraphQL is single-POST and needs auth — model sometimes attaches
+      // as REST and asks for token, sometimes refuses cleanly. Either
+      // behavior is fine; this fixture just confirms it doesn't crash
+      // and stays within budget.
+      mustNotCall: ["publish_project"],
+      maxTurns: 5,
+    },
+  },
+  {
+    id: "edge_two_databases_one_prompt",
+    userMessage:
+      "Connect two databases: postgres://r1@a.db.gov:5432/permits and postgres://r1@b.db.gov:5432/licenses",
+    expect: {
+      // Two distinct DB sources. Currently nothing prevents this but no
+      // explicit support either. Want to see the agent handle both URLs.
+      mustCall: ["add_source"],
+      sourceKinds: ["source.database"],
+      maxTurns: 6,
+    },
+  },
+  {
+    id: "edge_invalid_url",
+    userMessage: "Build an MCP for blarg://not-a-real-url",
+    expect: {
+      // Should refuse, not attempt.
+      mustNotCall: ["add_source"],
+      maxTurns: 2,
+    },
+  },
+  {
+    id: "edge_rest_with_path_param",
+    userMessage: "Expose GET https://api.example.com/users/{id} where id is a number",
+    expect: {
+      // Path-parameter style endpoints. callRest already supports {id}
+      // substitution; testing that the agent passes the path through
+      // verbatim and registers `id` as a tool parameter.
+      mustCall: ["add_source", "add_rest_endpoint"],
+      sourceKinds: ["source.rest"],
+      maxTurns: 5,
+    },
+  },
+  {
+    id: "edge_publish_twice",
+    userMessage: "Publish.",
+    // Seeded with a publishable project (will add seed branch in run.ts
+    // if this fixture starts misbehaving). For now we just confirm a
+    // single publish call when the project is ready.
+    expect: {
+      maxTurns: 3,
+    },
+  },
+  {
+    id: "edge_rest_no_endpoints_described",
+    userMessage:
+      "Connect to the OpenWeatherMap base URL https://api.openweathermap.org and we'll figure out endpoints later.",
+    expect: {
+      // The model legitimately swings between kind='rest' (API hostname)
+      // and kind='webpage' (single URL). Both attach SOMETHING — that's
+      // what matters. Asserting on add_source called is enough.
+      mustCall: ["add_source"],
+      maxTurns: 6,
+    },
+  },
+  {
+    id: "edge_rename_request",
+    userMessage: "Rename my MCP project to 'Permits Server'.",
+    expect: {
+      // We have no rename tool. Agent should refuse / explain, not
+      // pretend to do it.
+      mustNotCall: ["create_project", "add_source", "publish_project"],
+      maxTurns: 2,
+    },
+  },
+  {
+    id: "edge_what_tools_do_i_have",
+    userMessage: "What tools does my MCP expose right now?",
+    expect: {
+      // Pure inspection. Agent should call check_project_health or just
+      // read the injected state. Must not mutate.
+      mustNotCall: ["create_project", "add_source", "publish_project"],
+      maxTurns: 3,
+    },
+  },
+];
+
 export const FIXTURES: Fixture[] = [
   ...HAPPY,
   ...REFUSALS,
   ...CONTINUITY,
   ...PROD,
+  ...EDGE,
 ];

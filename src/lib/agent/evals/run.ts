@@ -120,6 +120,15 @@ async function runFixture(fx: Fixture): Promise<FixtureResult> {
       withIndexedFiles: true,
       projectName: "Eval chat-uploads project",
     });
+  } else if (fx.id === "edge_rename_request") {
+    // "Rename my project" needs an existing project to rename. With one
+    // seeded, create_project gets filtered out of the catalog, and we
+    // can test that the agent doesn't try to mutate via other tools.
+    const p = await createProject(
+      { userId: EVAL_USER_ID },
+      "Existing project",
+    );
+    projectId = p.id;
   }
 
   await db.insert(schema.conversations).values({

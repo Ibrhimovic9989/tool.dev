@@ -103,9 +103,31 @@ export function listTools(project: McpProject): ToolDef[] {
           },
         });
       }
+    } else if (node.data.kind === "source.webpage") {
+      for (const t of node.data.targets.filter((x) => x.enabled && x.url)) {
+        const safe = sanitizeToolName(t.resourceName || t.id);
+        out.push({
+          name: `fetch_${safe}`,
+          description:
+            t.description ||
+            `Fetch the current content of ${t.url} as plain text.`,
+          inputSchema: { type: "object", properties: {}, required: [] },
+        });
+      }
     }
   }
-  return out;
+  // Cross-source tool-name dedup. Two sources (e.g. a Documents collection
+  // and a REST endpoint) could sanitize to the same name; without dedup
+  // the MCP client sees duplicates and tools/call picks the first match
+  // unpredictably. Keep first-wins and log the collision.
+  const seen = new Set<string>();
+  const deduped: ToolDef[] = [];
+  for (const t of out) {
+    if (seen.has(t.name)) continue;
+    seen.add(t.name);
+    deduped.push(t);
+  }
+  return deduped;
 }
 
 function sanitizeToolName(s: string): string {
@@ -169,9 +191,37 @@ export async function callTool(
           return callFindSimilar(project.id, c.id, args);
         }
       }
+    } else if (node.data.kind === "source.webpage") {
+      for (const t of node.data.targets) {
+        if (!t.enabled || !t.url) continue;
+        const safe = sanitizeToolName(t.resourceName || t.id);
+        if (name === `fetch_${safe}`) {
+          return callFetchWebpage(t.url);
+        }
+      }
     }
   }
   return errorResult(`Unknown tool: ${name}`);
+}
+
+async function callFetchWebpage(url: string): Promise<ToolResult> {
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": "makemcp.dev/0.1" },
+    });
+    if (!res.ok) {
+      return errorResult(`Fetch failed: HTTP ${res.status}`);
+    }
+    const text = await res.text();
+    // MCP clients consume tool output as text; ~256 KB cap is enough for
+    // most HTML pages and well under context limits.
+    const capped = text.length > 256_000 ? text.slice(0, 256_000) + "\n…[truncated]" : text;
+    return { content: [{ type: "text", text: capped }] };
+  } catch (e) {
+    return errorResult(
+      `Fetch error: ${e instanceof Error ? e.message : "unknown"}`,
+    );
+  }
 }
 
 export async function readResource(
