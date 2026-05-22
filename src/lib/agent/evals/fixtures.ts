@@ -70,6 +70,22 @@ const HAPPY: Fixture[] = [
     },
   },
   {
+    id: "rest_full_url_with_params",
+    // The Open-Meteo regression: a real user pasted this URL and the
+    // agent attached the base URL but had no way to define the endpoint
+    // — leaving the project in permanent draft. Tests that the agent
+    // parses the URL, calls add_source AND add_rest_endpoint in one turn,
+    // and produces a publishable project with ≥1 tool exposed.
+    userMessage:
+      "create an mcp server for https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41&hourly=temperature_2m",
+    expect: {
+      mustCall: ["add_source", "add_rest_endpoint"],
+      sourceKinds: ["source.rest"],
+      minTools: 1,
+      maxTurns: 5,
+    },
+  },
+  {
     id: "documents_simple",
     userMessage: "I want to upload our policy PDFs and make them searchable.",
     expect: {

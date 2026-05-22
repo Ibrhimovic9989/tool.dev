@@ -130,6 +130,54 @@ export const TOOLS: ToolDef[] = [
     parameters: { type: "object", properties: {} },
   },
   {
+    name: "add_rest_endpoint",
+    description:
+      "Define a REST endpoint as an MCP tool on the project's existing REST source. Required follow-up after add_source(kind='rest') — without at least one endpoint the REST source is in draft. If the user pasted a full URL like 'https://api.example.com/foo?lat=1&lng=2', parse it: extract the path under the base URL, and turn each query param into a tool parameter. Fixed/locked values (e.g. format=json) can be folded directly into the path: '/foo?format=json'.",
+    parameters: {
+      type: "object",
+      properties: {
+        toolName: {
+          type: "string",
+          description:
+            "snake_case identifier the AI client will call, e.g. 'get_hourly_temperature'",
+        },
+        description: {
+          type: "string",
+          description:
+            "1-sentence plain-English description of what this endpoint does",
+        },
+        method: {
+          type: "string",
+          enum: ["GET", "POST", "PUT", "DELETE", "PATCH"],
+        },
+        path: {
+          type: "string",
+          description:
+            "Path under the source's base URL, e.g. '/forecast'. May include fixed query params like '/forecast?hourly=temperature_2m'.",
+        },
+        parameters: {
+          type: "array",
+          description:
+            "Parameters the AI client will supply when calling this tool. Omit fixed values that you've already embedded in the path.",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              type: {
+                type: "string",
+                enum: ["string", "integer", "number", "boolean"],
+              },
+              required: { type: "boolean" },
+              description: { type: "string" },
+            },
+            required: ["name", "type"],
+          },
+        },
+      },
+      required: ["toolName", "method", "path"],
+    },
+  },
+  {
     name: "check_project_health",
     description:
       "Inspect the current project and report sources, exposed tool count, and any blockers. Optional — publish_project enforces the same check server-side regardless.",
@@ -167,6 +215,8 @@ export async function runTool(
         return await toolAddSource(ctx, { kind: "documents", ...args });
       case "discover_database_tables":
         return await toolDiscoverDatabaseTables(ctx);
+      case "add_rest_endpoint":
+        return await toolAddRestEndpoint(ctx, args);
       case "check_project_health":
         return await toolCheckProjectHealth(ctx);
       case "publish_project":
@@ -395,8 +445,117 @@ async function toolAddRestSource(
   };
   await addNodeToProject({ userId: ctx.userId }, ctx.currentProjectId, node);
   return {
-    message: `Attached REST API '${data.name}' at ${baseUrl}. Auth: ${authKind}. Add endpoints from the builder UI or via OpenAPI import in a follow-up step.`,
-    data: { nodeId: node.id },
+    message: `Attached REST API '${data.name}' at ${baseUrl}. Auth: ${authKind}. NEXT: call add_rest_endpoint to define at least one endpoint — until you do, the REST source is in draft and publish will refuse.`,
+    data: { baseUrl },
+    projectUpdated: true,
+  };
+}
+
+async function toolAddRestEndpoint(
+  ctx: ToolContext,
+  args: Record<string, unknown>,
+): Promise<ToolHandlerResult> {
+  if (!ctx.currentProjectId) {
+    return { message: "Call create_project first.", isError: true };
+  }
+  const project = await getProject(
+    { userId: ctx.userId },
+    ctx.currentProjectId,
+  );
+  if (!project) return { message: "Project not found.", isError: true };
+
+  const restNode = project.nodes.find((n) => n.data.kind === "source.rest");
+  if (!restNode || restNode.data.kind !== "source.rest") {
+    return {
+      message:
+        "No REST source on this project yet — call add_source({kind:'rest', baseUrl}) first.",
+      isError: true,
+    };
+  }
+
+  const toolName = String(args.toolName ?? "")
+    .replace(/[^a-z0-9_]/gi, "_")
+    .toLowerCase()
+    .slice(0, 60);
+  if (!toolName) {
+    return { message: "toolName is required.", isError: true };
+  }
+  const method = String(args.method ?? "GET").toUpperCase() as
+    | "GET"
+    | "POST"
+    | "PUT"
+    | "DELETE"
+    | "PATCH";
+  if (!["GET", "POST", "PUT", "DELETE", "PATCH"].includes(method)) {
+    return {
+      message: `Invalid method '${method}'. Use GET, POST, PUT, DELETE, or PATCH.`,
+      isError: true,
+    };
+  }
+  const path = String(args.path ?? "");
+  if (!path) {
+    return { message: "path is required (e.g. '/forecast').", isError: true };
+  }
+
+  type RawParam = {
+    name?: unknown;
+    type?: unknown;
+    required?: unknown;
+    description?: unknown;
+  };
+  const rawParams = Array.isArray(args.parameters)
+    ? (args.parameters as RawParam[])
+    : [];
+  const parameters = rawParams
+    .filter((p) => typeof p?.name === "string")
+    .map((p) => {
+      const t =
+        p.type === "integer" ||
+        p.type === "number" ||
+        p.type === "boolean" ||
+        p.type === "string"
+          ? p.type
+          : ("string" as const);
+      return {
+        name: String(p.name),
+        in: "query" as const,
+        type: t as "string" | "integer" | "number" | "boolean",
+        required: !!p.required,
+        description: typeof p.description === "string" ? p.description : "",
+      };
+    });
+
+  const description =
+    typeof args.description === "string" ? args.description : `${method} ${path}`;
+  const newEndpoint = {
+    id: nanoid(8),
+    toolName,
+    description,
+    method,
+    path,
+    parameters,
+    enabled: true,
+  };
+
+  const restNodeId = restNode.id;
+  await updateProjectGraph(
+    { userId: ctx.userId },
+    ctx.currentProjectId,
+    (p) => {
+      const node = p.nodes.find((n) => n.id === restNodeId);
+      if (!node || node.data.kind !== "source.rest") return;
+      // Skip dupes — same toolName on the same source is a no-op.
+      if (node.data.endpoints.some((e) => e.toolName === toolName)) return;
+      node.data.endpoints = [...node.data.endpoints, newEndpoint];
+      node.data.status = node.data.endpoints.some((e) => e.enabled)
+        ? "ready"
+        : "draft";
+    },
+  );
+
+  return {
+    message: `Defined endpoint '${toolName}' (${method} ${path}) on the REST source. The source is now ready; the MCP exposes this tool. ${parameters.length} parameter(s).`,
+    data: { toolName, method, path, parameters: parameters.map((p) => p.name) },
     projectUpdated: true,
   };
 }
